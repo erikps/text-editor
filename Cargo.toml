@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 notan = "0.11.0"
+ropey = "1.6.1"

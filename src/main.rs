@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use notan::draw::*;
 use notan::prelude::*;
 
@@ -7,13 +9,87 @@ struct Cursor {
     y: usize,
 }
 
-#[derive(Debug, PartialEq)]
+impl Cursor {
+    fn new(x: usize, y: usize) -> Self {
+        Cursor { x, y }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Motion {
+    Left,
+    Right,
+    Up,
+    Down,
+    ForwardWord,
+    ForwardWordEnd,
+    BackWord,
+}
+
+impl Motion {
+    fn get_movement(self: &Motion, app: &App, state: &State) -> Cursor {
+        match self {
+            Motion::ForwardWord => {
+                let line = state.current_line();
+                
+                Cursor::new(state.cursor.x, state.cursor.y)
+            },
+            _ => Cursor::new(state.cursor.x, state.cursor.y),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Hash)]
+struct Shortcut {
+    key: KeyCode,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+}
+
+impl Shortcut {
+    fn new(key: KeyCode) -> Self {
+        Shortcut {
+            key,
+            ctrl: false,
+            alt: false,
+            shift: false,
+        }
+    }
+
+    fn shift(&mut self) -> &mut Self {
+        self.shift = true;
+        self
+    }
+
+    fn ctrl(&mut self) -> &mut Self {
+        self.ctrl = true;
+        self
+    }
+
+    fn alt(&mut self) -> &mut Self {
+        self.alt = true;
+        self
+    }
+}
+
+type KeyBindings<T> = HashMap<Shortcut, T>;
+type ActionBindings = KeyBindings<Action>;
+type MotionBindings = KeyBindings<Motion>;
+
+#[derive(Debug, Clone)]
+enum Action {
+    Delete,
+    Replace,
+}
+
+#[derive(Debug, PartialEq, Clone)]
 enum Mode {
     Normal,
     Input,
 }
 
-#[derive(AppState, Debug)]
+#[derive(AppState)]
 struct State {
     font: Font,
     line_height: f32,
@@ -23,24 +99,32 @@ struct State {
 
     mode: Mode,
 
+    action: Option<Action>,
+
+    action_bindings: ActionBindings,
+    motion_bindings: MotionBindings,
+
     last_time: f32,
+    initial_movement_delay: f32,
+    inter_movement_delay: f32,
 }
 
 impl State {
-    pub fn move_x(&mut self, x: usize) {
-        self.cursor.x = usize::min(
-            usize::max(self.cursor.x + x, 0),
-            self.lines[self.cursor.y].len() - 1,
-        );
+    pub fn move_x(&mut self, x: i32) {
+        let max_value = self.lines[self.cursor.y].len() as i32 - 1;
+        let new_x = (self.cursor.x as i32 + x).clamp(0, max_value);
+        self.cursor.x = new_x as usize;
     }
 
-    pub fn move_y(&mut self, y: usize) {
-        self.cursor.y = usize::min(
-            usize::max(self.cursor.y + y, 0),
-            self.lines.len() - 1,
-        );
-
+    pub fn move_y(&mut self, y: i32) {
+        let max_value = self.lines.len() as i32 - 1;
+        let new_y = (self.cursor.y as i32 + y).clamp(0, max_value);
+        self.cursor.y = new_y as usize;
         self.move_x(0);
+    }
+
+    pub fn current_line(&self) -> String {
+        self.lines[self.cursor.y].clone()
     }
 }
 
@@ -73,6 +157,12 @@ fn setup(gfx: &mut Graphics) -> State {
         String::from("print('!')"),
     ];
 
+    let mut action_bindings = ActionBindings::new();
+    let mut motion_bindings = MotionBindings::new();
+
+    action_bindings.insert(Shortcut::new(KeyCode::D), Action::Delete);
+    motion_bindings.insert(Shortcut::new(KeyCode::W), Motion::ForwardWord);
+
     State {
         font,
         line_height: 16.0,
@@ -82,14 +172,20 @@ fn setup(gfx: &mut Graphics) -> State {
 
         mode: Mode::Normal,
 
+        action: Option::None,
+        action_bindings,
+        motion_bindings,
+
         last_time: 0.0,
+        inter_movement_delay: 0.05,
+        initial_movement_delay: 0.005,
     }
 }
 
 fn event(state: &mut State, event: Event) {
     if state.mode == Mode::Input {
         match event {
-            Event::ReceivedCharacter(c) if c != '\u{7f}' && !c.is_control() && c.is_ascii() => {
+            Event::ReceivedCharacter(c) if c != '\u{7f}' && !c.is_control()  => { //&& c.is_ascii()
                 state.lines[state.cursor.y].insert(state.cursor.x, c);
                 state.cursor.x += 1;
             }
@@ -98,52 +194,83 @@ fn event(state: &mut State, event: Event) {
     }
 }
 
+fn was_pressed_or_held(app: &mut App, state: &mut State, key_code: KeyCode) -> bool {
+    let pressed = app.keyboard.was_pressed(key_code)
+        || ((app.keyboard.down_delta(key_code) > state.initial_movement_delay)
+            && app.timer.elapsed_f32() - state.last_time > state.inter_movement_delay);
+    if pressed {
+        state.last_time = app.timer.elapsed_f32();
+    }
+    pressed
+}
+
+fn get_motion_from_key_press(app: &App, state: &mut State) -> Option<Motion> {
+    for (shortcut, motion) in state.motion_bindings.iter() {
+        if app.keyboard.was_pressed(shortcut.key) {
+            return Some(motion.clone());
+        }
+    }
+
+    Option::None
+}
+
 fn update(app: &mut App, state: &mut State) {
-    let current_time = app.timer.elapsed_f32();
+    if app.keyboard.was_pressed(KeyCode::Return) && app.keyboard.alt() {
+        let is_fullscreen = app.window().is_fullscreen();
+        app.window().set_fullscreen(!is_fullscreen);
+    }
 
     match state.mode {
         Mode::Normal => {
+            let action = state.action.clone();
+
+            if let Some(action) = action {
+                match action {
+                    Action::Delete => {}
+                    _ => {}
+                }
+            }
+
             if app.keyboard.is_down(KeyCode::I) {
                 state.mode = Mode::Input;
                 return;
             }
 
-            if current_time - state.last_time > INPUT_DELAY {
-                if app.keyboard.is_down(KeyCode::J) {
-                    // if state.cursor.y < state.lines.len() - 1 {
-                    //     state.cursor.y = state.cursor.y + 1;
-                    // }
+            if was_pressed_or_held(app, state, KeyCode::Equals) && app.keyboard.ctrl() {
+                state.line_height += 1f32;
+            }
 
-                    // state.cursor.x =
-                    //     usize::min(state.cursor.x, state.lines[state.cursor.y].len() - 1);
-                    //
-                    state.move_y(1);
-                }
+            if was_pressed_or_held(app, state, KeyCode::Minus) && app.keyboard.ctrl() {
+                state.line_height = (state.line_height - 1f32).max(1f32);
+            }
 
-                if app.keyboard.is_down(KeyCode::K) {
-                    if state.cursor.y > 0 {
-                        state.cursor.y = state.cursor.y - 1;
-                    }
-                    state.cursor.x =
-                        usize::min(state.cursor.x, state.lines[state.cursor.y].len() - 1);
-                }
+            if app.keyboard.was_pressed(KeyCode::A) {
+                state.move_x(1);
+                state.mode = Mode::Input;
+                return;
+            }
 
-                if app.keyboard.is_down(KeyCode::L) {
-                    if state.cursor.x < state.lines[state.cursor.y].len() - 1 {
-                        state.cursor.x = state.cursor.x + 1;
-                    }
-                }
+            if app.keyboard.was_pressed(KeyCode::X) {
+                state.lines[state.cursor.y].remove(state.cursor.x);
+                state.move_x(0);
+            }
 
-                if app.keyboard.is_down(KeyCode::H) {
-                    if state.cursor.x > 0 {
-                        state.cursor.x = state.cursor.x - 1;
-                    }
-                }
+            if was_pressed_or_held(app, state, KeyCode::J) {
+                state.move_y(1);
+            }
 
-                state.last_time = current_time;
+            if was_pressed_or_held(app, state, KeyCode::K) {
+                state.move_y(-1);
+            }
+
+            if was_pressed_or_held(app, state, KeyCode::L) {
+                state.move_x(1);
+            }
+
+            if was_pressed_or_held(app, state, KeyCode::H) {
+                state.move_x(-1);
             }
         }
-
         Mode::Input => {
             if app.keyboard.was_pressed(KeyCode::Escape) {
                 state.mode = Mode::Normal;
@@ -174,15 +301,18 @@ fn update(app: &mut App, state: &mut State) {
 fn draw(gfx: &mut Graphics, state: &mut State) {
     let mut draw = gfx.create_draw();
     draw.clear(Color::BLACK);
+    
 
     for (index, line) in state.lines.iter().enumerate() {
         let y_position = index as f32 * state.line_height;
+
         draw.text(&state.font, &line)
             .position(0.0, y_position)
             .size(state.line_height);
         let last_bounds = draw.last_text_bounds();
 
         if state.cursor.y == index {
+            
             let char_width = last_bounds.max_x() / line.len() as f32;
             let x_position = char_width * state.cursor.x as f32;
 
