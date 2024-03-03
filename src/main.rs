@@ -1,19 +1,11 @@
 use std::collections::HashMap;
 
 use notan::draw::*;
+use notan::log::debug;
 use notan::prelude::*;
+use ropey::iter::Chars;
 
-#[derive(Debug)]
-struct Cursor {
-    x: usize,
-    y: usize,
-}
-
-impl Cursor {
-    fn new(x: usize, y: usize) -> Self {
-        Cursor { x, y }
-    }
-}
+type Cursor = usize;
 
 #[derive(Debug, Clone)]
 enum Motion {
@@ -26,15 +18,43 @@ enum Motion {
     BackWord,
 }
 
+fn skip_while<F>(chars: Chars, predicate: F) -> Cursor
+where
+    F: Fn(usize, char) -> bool,
+{
+    let mut index = 0;
+    for (i, character) in chars.enumerate() {
+        if !predicate(i, character) {
+            break;
+        }
+        index += 1;
+    }
+    index
+}
+
 impl Motion {
-    fn get_movement(self: &Motion, app: &App, state: &State) -> Cursor {
+    /// Return the target location of this movement
+    fn get_target(self, state: &State) -> Cursor {
         match self {
             Motion::ForwardWord => {
-                let line = state.current_line();
-                
-                Cursor::new(state.cursor.x, state.cursor.y)
-            },
-            _ => Cursor::new(state.cursor.x, state.cursor.y),
+                let chars = state.text.chars_at(state.cursor);
+                let is_alphanumeric_start = state.text.char(state.cursor).is_alphanumeric();
+                let offset = skip_while(chars, |_, character| {
+                    // skip to the next non-alphanumeric character
+                    is_alphanumeric_start == character.is_alphanumeric()
+                });
+                state.cursor + offset
+            }
+            Motion::BackWord => {
+                let chars = state.text.chars_at(state.cursor).reversed();
+                let is_alphanumeric_start = state.text.char(state.cursor).is_alphanumeric();
+                let offset = skip_while(chars, |_, character| {
+                    // skip to the next non-alphanumeric character
+                    is_alphanumeric_start == character.is_alphanumeric()
+                });
+                state.cursor - offset - 1
+            }
+            _ => state.cursor,
         }
     }
 }
@@ -95,7 +115,7 @@ struct State {
     line_height: f32,
 
     cursor: Cursor,
-    lines: Vec<String>,
+    text: ropey::Rope,
 
     mode: Mode,
 
@@ -110,21 +130,27 @@ struct State {
 }
 
 impl State {
+    pub fn find_cursor_line_position(&self) -> usize {
+        // find the char index of the cursor within the current line
+        let line = self.text.byte_to_line(self.cursor);
+        let line_start = self.text.line_to_char(line);
+        self.cursor - line_start
+    }
+
     pub fn move_x(&mut self, x: i32) {
-        let max_value = self.lines[self.cursor.y].len() as i32 - 1;
-        let new_x = (self.cursor.x as i32 + x).clamp(0, max_value);
-        self.cursor.x = new_x as usize;
+        // move the cursor in by x. positive x -> move right; negative -> move left.
+        //      automatically moves across lines when the end of line is reached
+        self.cursor =
+            (self.cursor as i64 + x as i64).clamp(0, self.text.len_chars() as i64) as Cursor;
     }
 
     pub fn move_y(&mut self, y: i32) {
-        let max_value = self.lines.len() as i32 - 1;
-        let new_y = (self.cursor.y as i32 + y).clamp(0, max_value);
-        self.cursor.y = new_y as usize;
-        self.move_x(0);
-    }
-
-    pub fn current_line(&self) -> String {
-        self.lines[self.cursor.y].clone()
+        let line = self.text.byte_to_line(self.cursor);
+        let target_line = (line as i64 + y as i64).clamp(0, self.text.len_lines() as i64) as Cursor;
+        let previous_line_position = self.find_cursor_line_position();
+        let new_line_position = previous_line_position.clamp(0, self.text.line(line).len_chars());
+        self.cursor = self.text.line_to_char(target_line);
+        self.move_x(new_line_position as i32);
     }
 }
 
@@ -145,30 +171,32 @@ fn setup(gfx: &mut Graphics) -> State {
         .create_font(include_bytes!("assets/FiraCode-Regular.ttf"))
         .unwrap();
 
-    let lines = vec![
-        String::from("print('Hello World')"),
-        String::from("print('!=')"),
-        String::from("print('!')"),
-        String::from("print('!')"),
-        String::from("print('!')"),
-        String::from("print('!')"),
-        String::from("print('!')"),
-        String::from("print('!')"),
-        String::from("print('!')"),
-    ];
+    let text_string = r#"print('Hello World')
+print('!=')
+print('!')
+print('!')
+print('!')
+print('!')
+print('!')
+print('!')
+print('!')"#;
 
     let mut action_bindings = ActionBindings::new();
     let mut motion_bindings = MotionBindings::new();
 
     action_bindings.insert(Shortcut::new(KeyCode::D), Action::Delete);
+    action_bindings.insert(Shortcut::new(KeyCode::C), Action::Replace);
+
     motion_bindings.insert(Shortcut::new(KeyCode::W), Motion::ForwardWord);
+    motion_bindings.insert(Shortcut::new(KeyCode::E), Motion::ForwardWordEnd);
+    motion_bindings.insert(Shortcut::new(KeyCode::B), Motion::BackWord);
 
     State {
         font,
         line_height: 16.0,
 
-        cursor: Cursor { x: 0, y: 0 },
-        lines,
+        cursor: 0,
+        text: ropey::Rope::from(text_string),
 
         mode: Mode::Normal,
 
@@ -185,9 +213,9 @@ fn setup(gfx: &mut Graphics) -> State {
 fn event(state: &mut State, event: Event) {
     if state.mode == Mode::Input {
         match event {
-            Event::ReceivedCharacter(c) if c != '\u{7f}' && !c.is_control()  => { //&& c.is_ascii()
-                state.lines[state.cursor.y].insert(state.cursor.x, c);
-                state.cursor.x += 1;
+            Event::ReceivedCharacter(c) if c != '\u{7f}' && !c.is_control() => {
+                state.text.insert_char(state.cursor, c);
+                state.move_x(1);
             }
             _ => {}
         }
@@ -204,13 +232,21 @@ fn was_pressed_or_held(app: &mut App, state: &mut State, key_code: KeyCode) -> b
     pressed
 }
 
-fn get_motion_from_key_press(app: &App, state: &mut State) -> Option<Motion> {
+fn get_action_input(app: &App, state: &mut State) -> Option<Action> {
+    for (shortcut, action) in state.action_bindings.iter() {
+        if app.keyboard.was_pressed(shortcut.key) {
+            return Some(action.clone());
+        }
+    }
+    Option::None
+}
+
+fn get_motion_input(app: &App, state: &mut State) -> Option<Motion> {
     for (shortcut, motion) in state.motion_bindings.iter() {
         if app.keyboard.was_pressed(shortcut.key) {
             return Some(motion.clone());
         }
     }
-
     Option::None
 }
 
@@ -220,14 +256,33 @@ fn update(app: &mut App, state: &mut State) {
         app.window().set_fullscreen(!is_fullscreen);
     }
 
+    // if there is a new action input, replace the previous
+    let input_action = get_action_input(app, state);
+    if let Some(new_action) = input_action {
+        state.action = Some(new_action.clone());
+    }
+
     match state.mode {
         Mode::Normal => {
             let action = state.action.clone();
 
-            if let Some(action) = action {
-                match action {
-                    Action::Delete => {}
-                    _ => {}
+            if let Some(motion) = get_motion_input(app, state) {
+                let target = motion.get_target(state);
+                if let Some(action) = action {
+                    match action {
+                        Action::Delete => {
+                            if state.cursor <= target {
+                                state.text.remove(state.cursor..target);
+                            } else {
+                                state.text.remove(target..state.cursor);
+                                state.cursor = target;
+                            }
+                        }
+                        _ => {}
+                    }
+                    state.action = None;
+                } else {
+                    state.cursor = target;
                 }
             }
 
@@ -251,7 +306,7 @@ fn update(app: &mut App, state: &mut State) {
             }
 
             if app.keyboard.was_pressed(KeyCode::X) {
-                state.lines[state.cursor.y].remove(state.cursor.x);
+                state.text.remove(state.cursor..state.cursor + 1);
                 state.move_x(0);
             }
 
@@ -278,22 +333,22 @@ fn update(app: &mut App, state: &mut State) {
             }
 
             if app.keyboard.was_pressed(KeyCode::Back) {
-                if state.cursor.x > 0 {
-                    state.lines[state.cursor.y].remove(state.cursor.x - 1);
-                    state.cursor.x = state.cursor.x - 1
+                if state.cursor > 0 {
+                    state.text.remove(state.cursor - 1..state.cursor);
+                    state.move_x(-1);
                 }
             }
 
-            if app.keyboard.was_pressed(KeyCode::Return) {
-                let (left_string, right_string) =
-                    state.lines[state.cursor.y].split_at(state.cursor.x);
-                let left = String::from(left_string);
-                let right = String::from(right_string);
-                state.lines[state.cursor.y] = left;
-                state.lines.insert(state.cursor.y + 1, right);
-                state.cursor.y += 1;
-                state.cursor.x = 0;
-            }
+            // if app.keyboard.was_pressed(KeyCode::Return) {
+            //     let (left_string, right_string) =
+            //         state.text[state.cursor.y].split_at(state.cursor.x);
+            //     let left = String::from(left_string);
+            //     let right = String::from(right_string);
+            //     state.text[state.cursor.y] = left;
+            //     state.text.insert(state.cursor.y + 1, right);
+            //     state.cursor.y += 1;
+            //     state.cursor.x = 0;
+            // }
         }
     }
 }
@@ -301,20 +356,23 @@ fn update(app: &mut App, state: &mut State) {
 fn draw(gfx: &mut Graphics, state: &mut State) {
     let mut draw = gfx.create_draw();
     draw.clear(Color::BLACK);
-    
 
-    for (index, line) in state.lines.iter().enumerate() {
+    draw.text(&state.font, "0").color(Color::TRANSPARENT);
+    let bounds = draw.last_text_bounds();
+    let char_width = bounds.width;
+
+    let cursor_line = state.text.char_to_line(state.cursor);
+    let cursor_line_position = state.find_cursor_line_position();
+
+    for (index, line) in state.text.lines().enumerate() {
         let y_position = index as f32 * state.line_height;
 
-        draw.text(&state.font, &line)
+        draw.text(&state.font, &line.to_string())
             .position(0.0, y_position)
             .size(state.line_height);
-        let last_bounds = draw.last_text_bounds();
 
-        if state.cursor.y == index {
-            
-            let char_width = last_bounds.max_x() / line.len() as f32;
-            let x_position = char_width * state.cursor.x as f32;
+        if cursor_line == index {
+            let x_position = char_width * cursor_line_position as f32;
 
             match state.mode {
                 Mode::Normal => {
@@ -329,6 +387,5 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
             }
         }
     }
-
     gfx.render(&draw);
 }
