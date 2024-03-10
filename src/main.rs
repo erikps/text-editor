@@ -7,6 +7,10 @@ use ropey::iter::Chars;
 
 type Cursor = usize;
 
+fn cursor_add(cursor: Cursor, value: i32) -> Cursor {
+    return (cursor as i32 + value).max(0) as Cursor;
+}
+
 #[derive(Debug, Clone)]
 enum Motion {
     Left,
@@ -45,15 +49,31 @@ impl Motion {
                 });
                 state.cursor + offset
             }
-            Motion::BackWord => {
-                let chars = state.text.chars_at(state.cursor).reversed();
-                let is_alphanumeric_start = state.text.char(state.cursor).is_alphanumeric();
+            Motion::ForwardWordEnd => {
+                let chars = state.text.chars_at(state.cursor);
+                let is_alphanumeric_start =
+                    state.text.char(state.cursor.max(1) + 1).is_alphanumeric();
                 let offset = skip_while(chars, |_, character| {
                     // skip to the next non-alphanumeric character
                     is_alphanumeric_start == character.is_alphanumeric()
                 });
-                state.cursor - offset - 1
+                cursor_add(state.cursor, offset as i32 - 1)
             }
+            Motion::BackWord => {
+                let chars = state.text.chars_at(state.cursor).reversed();
+                let is_alphanumeric_start =
+                    state.text.char(state.cursor.max(1) - 1).is_alphanumeric();
+                let offset = skip_while(chars, |_, character| {
+                    // skip to the next non-alphanumeric character
+                    is_alphanumeric_start == character.is_alphanumeric()
+                });
+                cursor_add(state.cursor, -(offset as i32))
+            }
+            Motion::Left => state.get_movement_x(state.cursor, -1),
+            Motion::Down => state.get_movement_y(state.cursor, 1),
+            Motion::Up => state.get_movement_y(state.cursor, -1),
+            Motion::Right => state.get_movement_x(state.cursor, 1),
+
             _ => state.cursor,
         }
     }
@@ -130,27 +150,34 @@ struct State {
 }
 
 impl State {
-    pub fn find_cursor_line_position(&self) -> usize {
+    pub fn find_line_position(&self, cursor: Cursor) -> usize {
         // find the char index of the cursor within the current line
-        let line = self.text.byte_to_line(self.cursor);
+        let line = self.text.byte_to_line(cursor);
         let line_start = self.text.line_to_char(line);
-        self.cursor - line_start
+        cursor - line_start
+    }
+
+    pub fn get_movement_x(&self, cursor: Cursor, x: i32) -> Cursor {
+        // move the cursor in by x. positive x -> move right; negative -> move left.
+        //      automatically moves across lines when the end of line is reached
+        (cursor as i64 + x as i64).clamp(0, self.text.len_chars() as i64) as Cursor
     }
 
     pub fn move_x(&mut self, x: i32) {
-        // move the cursor in by x. positive x -> move right; negative -> move left.
-        //      automatically moves across lines when the end of line is reached
-        self.cursor =
-            (self.cursor as i64 + x as i64).clamp(0, self.text.len_chars() as i64) as Cursor;
+        self.cursor = self.get_movement_x(self.cursor, x);
+    }
+
+    pub fn get_movement_y(&self, cursor: Cursor, y: i32) -> Cursor {
+        let line = self.text.byte_to_line(cursor);
+        let target_line = (line as i64 + y as i64).clamp(0, self.text.len_lines() as i64) as Cursor;
+        let previous_line_position = self.find_line_position(cursor);
+        let new_line_position = previous_line_position.clamp(0, self.text.line(line).len_chars());
+        let new_position = self.text.line_to_char(target_line);
+        self.get_movement_x(new_line_position, new_position as i32)
     }
 
     pub fn move_y(&mut self, y: i32) {
-        let line = self.text.byte_to_line(self.cursor);
-        let target_line = (line as i64 + y as i64).clamp(0, self.text.len_lines() as i64) as Cursor;
-        let previous_line_position = self.find_cursor_line_position();
-        let new_line_position = previous_line_position.clamp(0, self.text.line(line).len_chars());
-        self.cursor = self.text.line_to_char(target_line);
-        self.move_x(new_line_position as i32);
+        self.cursor = self.get_movement_y(self.cursor, y);
     }
 }
 
@@ -186,6 +213,11 @@ print('!')"#;
 
     action_bindings.insert(Shortcut::new(KeyCode::D), Action::Delete);
     action_bindings.insert(Shortcut::new(KeyCode::C), Action::Replace);
+
+    motion_bindings.insert(Shortcut::new(KeyCode::H), Motion::Left);
+    motion_bindings.insert(Shortcut::new(KeyCode::J), Motion::Down);
+    motion_bindings.insert(Shortcut::new(KeyCode::K), Motion::Up);
+    motion_bindings.insert(Shortcut::new(KeyCode::L), Motion::Right);
 
     motion_bindings.insert(Shortcut::new(KeyCode::W), Motion::ForwardWord);
     motion_bindings.insert(Shortcut::new(KeyCode::E), Motion::ForwardWordEnd);
@@ -242,12 +274,19 @@ fn get_action_input(app: &App, state: &mut State) -> Option<Action> {
 }
 
 fn get_motion_input(app: &App, state: &mut State) -> Option<Motion> {
+    let mut result: Option<Motion> = None;
+
     for (shortcut, motion) in state.motion_bindings.iter() {
-        if app.keyboard.was_pressed(shortcut.key) {
-            return Some(motion.clone());
+        let pressed = app.keyboard.was_pressed(shortcut.key)
+            || ((app.keyboard.down_delta(shortcut.key) > state.initial_movement_delay)
+                && app.timer.elapsed_f32() - state.last_time > state.inter_movement_delay);
+        if pressed {
+            result = Some(motion.clone());
+            state.last_time = app.timer.elapsed_f32();
         }
+
     }
-    Option::None
+    result
 }
 
 fn update(app: &mut App, state: &mut State) {
@@ -278,7 +317,15 @@ fn update(app: &mut App, state: &mut State) {
                                 state.cursor = target;
                             }
                         }
-                        _ => {}
+                        Action::Replace => {
+                            state.mode = Mode::Input;
+                            if state.cursor <= target {
+                                state.text.remove(state.cursor..target);
+                            } else {
+                                state.text.remove(target..state.cursor);
+                                state.cursor = target;
+                            }
+                        }
                     }
                     state.action = None;
                 } else {
@@ -310,21 +357,21 @@ fn update(app: &mut App, state: &mut State) {
                 state.move_x(0);
             }
 
-            if was_pressed_or_held(app, state, KeyCode::J) {
-                state.move_y(1);
-            }
+            // if was_pressed_or_held(app, state, KeyCode::J) {
+            //     state.move_y(1);
+            // }
 
-            if was_pressed_or_held(app, state, KeyCode::K) {
-                state.move_y(-1);
-            }
+            // if was_pressed_or_held(app, state, KeyCode::K) {
+            //     state.move_y(-1);
+            // }
 
-            if was_pressed_or_held(app, state, KeyCode::L) {
-                state.move_x(1);
-            }
+            // if was_pressed_or_held(app, state, KeyCode::L) {
+            //     state.move_x(1);
+            // }
 
-            if was_pressed_or_held(app, state, KeyCode::H) {
-                state.move_x(-1);
-            }
+            // if was_pressed_or_held(app, state, KeyCode::H) {
+            //     state.move_x(-1);
+            // }
         }
         Mode::Input => {
             if app.keyboard.was_pressed(KeyCode::Escape) {
@@ -332,23 +379,17 @@ fn update(app: &mut App, state: &mut State) {
                 return;
             }
 
-            if app.keyboard.was_pressed(KeyCode::Back) {
+            if was_pressed_or_held(app, state, KeyCode::Back) {
                 if state.cursor > 0 {
                     state.text.remove(state.cursor - 1..state.cursor);
                     state.move_x(-1);
                 }
             }
 
-            // if app.keyboard.was_pressed(KeyCode::Return) {
-            //     let (left_string, right_string) =
-            //         state.text[state.cursor.y].split_at(state.cursor.x);
-            //     let left = String::from(left_string);
-            //     let right = String::from(right_string);
-            //     state.text[state.cursor.y] = left;
-            //     state.text.insert(state.cursor.y + 1, right);
-            //     state.cursor.y += 1;
-            //     state.cursor.x = 0;
-            // }
+            if was_pressed_or_held(app, state, KeyCode::Return) {
+                state.text.insert_char(state.cursor, '\n');
+                state.move_x(1)
+            }
         }
     }
 }
@@ -362,7 +403,7 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
     let char_width = bounds.width;
 
     let cursor_line = state.text.char_to_line(state.cursor);
-    let cursor_line_position = state.find_cursor_line_position();
+    let cursor_line_position = state.find_line_position(state.cursor);
 
     for (index, line) in state.text.lines().enumerate() {
         let y_position = index as f32 * state.line_height;
