@@ -19,7 +19,7 @@ jobs:
     - uses: cargo-bins/cargo-binstall@main
     - name: Install Trunk
       run: 
-        cargo binstall --locked trunk
+        cargo binstall --no-confirm --locked trunk
         && rustup target add wasm32-unknown-unknown
     - name: Build
       run: trunk build
