@@ -36,4 +36,7 @@ jobs:
       id-token: write
       
     steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@v4
+
       - uses: actions/deploy-pages@v4.0.5
