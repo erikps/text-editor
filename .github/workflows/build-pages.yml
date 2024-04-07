@@ -16,10 +16,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - uses: cargo-bins/cargo-binstall@main
     - name: Install Trunk
       run: 
-        curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-        && cargo binstall --locked trunk
+        cargo binstall --locked trunk
         && rustup target add wasm32-unknown-unknown
     - name: Build
       run: trunk build
