@@ -22,10 +22,15 @@ jobs:
         cargo binstall --no-confirm --locked trunk
         && rustup target add wasm32-unknown-unknown
     - name: Build
-      run: trunk build
-    - name: Tar
-      run: tar -czvf github-pages dist/ 
-      
+      run: trunk build --public-url ${{ github.event.repository.name }} --release
+    - name: Configure Pages
+      uses: actions/configure-pages@v4
+
+    - name: Upload Pages artifact
+      uses: actions/upload-pages-artifact@v3
+      with: 
+        path: "./dist"
+
   deploy:
     runs-on: ubuntu-latest
 
@@ -38,16 +43,8 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-
       
     steps:
-      - run: echo $(ls)
-      - name: Configure Pages
-        uses: actions/configure-pages@v4
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-
       - uses: actions/deploy-pages@v4.0.5
         id: deployment
 
