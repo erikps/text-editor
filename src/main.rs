@@ -296,6 +296,14 @@ fn update(app: &mut App, state: &mut State) {
                     .insert(state.buffer.cursor, &" ".repeat(TAB_SIZE));
                 state.buffer.move_x(TAB_SIZE as i32);
             }
+
+            if was_pressed_or_held(app, state, KeyCode::Delete) {
+                let length = state.buffer.text.len_chars();
+                state
+                    .buffer
+                    .text
+                    .remove(state.buffer.cursor..(state.buffer.cursor + 1).min(length));
+            }
         }
 
         Mode::Command => {
