@@ -203,6 +203,9 @@ fn execute_command(state: &mut State) {
                 println!("{:#}", result.is_ok());
             }
         }
+        x if x.get(1..2) == Some("q") => {
+            std::process::exit(0);
+        }
         _ => {}
     }
 
@@ -382,12 +385,22 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
     for (index, line) in state.buffer.text.lines().enumerate() {
         let y_position = index as f32 * state.line_height;
 
-        let line_number = format!("{:>width$}", &index.to_string(), width=line_number_digit_count);
-        draw.text(&state.font, &line_number)
-            .position(0.0, y_position)
-            .size(state.line_height)
-            .color(Color::GRAY);
+        if SHOW_LINE_NUMBERS {
+            // pad the line number with spaces on the left
+            let line_number = format!(
+                "{:>width$}",
+                &index.to_string(),
+                width = line_number_digit_count
+            );
 
+            // draw the line number
+            draw.text(&state.font, &line_number)
+                .position(0.0, y_position)
+                .size(state.line_height)
+                .color(Color::GRAY);
+        }
+
+        // draw the line text
         draw.text(&state.font, &line.to_string())
             .position(line_number_offset, y_position)
             .size(state.line_height);
