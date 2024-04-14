@@ -1,226 +1,21 @@
+mod action;
+mod io;
+mod motion;
+mod state;
+mod buffer;
+
+use io::{load, save};
+use state::*;
+use action::*;
+use motion::*;
+use buffer::Buffer;
+
 use std::collections::HashMap;
 
 use notan::app::Plugins;
 use notan::draw::*;
 use notan::prelude::*;
 use notan_egui::{EguiConfig, EguiPluginSugar};
-use ropey::iter::Chars;
-
-type Cursor = usize;
-
-fn cursor_add(cursor: Cursor, value: i32) -> Cursor {
-    return (cursor as i32 + value).max(0) as Cursor;
-}
-
-struct Buffer {
-    text: ropey::Rope,
-    cursor: Cursor,
-}
-
-struct Viewport {
-    buffer: Buffer,
-}
-
-#[derive(Debug, Clone)]
-enum Motion {
-    Left,
-    Right,
-    Up,
-    Down,
-    ForwardWord,
-    ForwardWordEnd,
-    BackWord,
-    EndOfLine,
-}
-
-fn skip_while<F>(chars: Chars, predicate: F) -> Cursor
-where
-    F: Fn(usize, char) -> bool,
-{
-    let mut index = 0;
-    for (i, character) in chars.enumerate() {
-        if !predicate(i, character) {
-            break;
-        }
-        index += 1;
-    }
-    index
-}
-
-impl Motion {
-    /// Return the target location of this movement
-    fn get_target(self, state: &State) -> Cursor {
-        match self {
-            Motion::ForwardWord => {
-                let chars = state.text.chars_at(state.cursor);
-                let is_alphanumeric_start = state.text.char(state.cursor).is_alphanumeric();
-                let offset = skip_while(chars, |_, character| {
-                    // skip to the next non-alphanumeric character
-                    is_alphanumeric_start == character.is_alphanumeric()
-                });
-                state.get_movement_x(state.cursor, offset as i32)
-            }
-            Motion::ForwardWordEnd => {
-                let chars = state.text.chars_at(state.get_movement_x(state.cursor, 1));
-                let is_alphanumeric_start = state
-                    .text
-                    .char((state.cursor.max(1) + 1).min(state.text.len_chars() - 1))
-                    .is_alphanumeric();
-
-                let offset = skip_while(chars, |_, character| {
-                    // skip to the next non-alphanumeric character
-                    is_alphanumeric_start == character.is_alphanumeric()
-                }) + 1;
-                state.get_movement_x(state.cursor, offset as i32 - 1)
-            }
-            Motion::BackWord => {
-                let chars = state.text.chars_at(state.cursor).reversed();
-                let is_alphanumeric_start =
-                    state.text.char(state.cursor.max(1) - 1).is_alphanumeric();
-                let offset = skip_while(chars, |_, character| {
-                    // skip to the next non-alphanumeric character
-                    is_alphanumeric_start == character.is_alphanumeric()
-                });
-                cursor_add(state.cursor, -(offset as i32))
-            }
-            Motion::Left => state.get_movement_x(state.cursor, -1),
-            Motion::Down => state.get_movement_y(state.cursor, 1),
-            Motion::Up => state.get_movement_y(state.cursor, -1),
-            Motion::Right => state.get_movement_x(state.cursor, 1),
-
-            Motion::EndOfLine => state.get_end_of_line_cursor(state.cursor),
-
-            _ => state.cursor,
-        }
-    }
-}
-
-#[derive(PartialEq, Eq, Hash)]
-struct Shortcut {
-    key: KeyCode,
-    ctrl: bool,
-    alt: bool,
-    shift: bool,
-}
-
-impl Shortcut {
-    fn new(key: KeyCode) -> Self {
-        Shortcut {
-            key,
-            ctrl: false,
-            alt: false,
-            shift: false,
-        }
-    }
-
-    fn shift(mut self) -> Self {
-        self.shift = true;
-        self
-    }
-
-    fn ctrl(mut self) -> Self {
-        self.ctrl = true;
-        self
-    }
-
-    fn alt(&mut self) -> &mut Self {
-        self.alt = true;
-        self
-    }
-}
-
-#[derive(PartialEq, Eq, Hash, Clone)]
-enum ModeChange {
-    Insert,
-    InsertAfter,
-    InsertEnd,
-    InsertStart,
-    Escape,
-}
-
-type KeyBindings<T> = HashMap<Shortcut, T>;
-type ActionBindings = KeyBindings<Action>;
-type MotionBindings = KeyBindings<Motion>;
-type ModeChangeBindings = KeyBindings<ModeChange>;
-
-struct Keymap {
-    action_bindings: ActionBindings,
-    motion_bindings: MotionBindings,
-    mode_change_bindings: HashMap<Mode, ModeChangeBindings>,
-}
-
-#[derive(Debug, Clone)]
-enum Action {
-    Delete,
-    Replace,
-}
-
-#[derive(Debug, PartialEq, Clone, Hash, Eq)]
-enum Mode {
-    Normal,
-    Insert,
-}
-
-#[derive(AppState)]
-struct State {
-    font: Font,
-    line_height: f32,
-
-    cursor: Cursor,
-    text: ropey::Rope,
-
-    mode: Mode,
-
-    action: Option<Action>,
-
-    keymap: Keymap,
-
-    last_time: f32,
-    initial_movement_delay: f32,
-    inter_movement_delay: f32,
-}
-
-impl State {
-    pub fn find_line_position(&self, cursor: Cursor) -> usize {
-        // find the char index of the cursor within the current line
-        let line = self.text.byte_to_line(cursor);
-        let line_start = self.text.line_to_char(line);
-        cursor - line_start
-    }
-
-    pub fn get_movement_x(&self, cursor: Cursor, x: i32) -> Cursor {
-        // move the cursor in by x. positive x -> move right; negative -> move left.
-        //      automatically moves across lines when the end of line is reache
-        (cursor as i64 + x as i64).clamp(0, self.text.len_chars() as i64 - 1) as Cursor
-    }
-
-    pub fn move_x(&mut self, x: i32) {
-        self.cursor = self.get_movement_x(self.cursor, x);
-    }
-
-    pub fn get_movement_y(&self, cursor: Cursor, y: i32) -> Cursor {
-        let current_y = self.text.byte_to_line(cursor);
-        let new_y =
-            (current_y as i64 + y as i64).clamp(0, (self.text.len_lines() - 1) as i64) as Cursor;
-        let current_x = self.find_line_position(cursor);
-
-        let new_x = current_x.clamp(0, self.text.line(new_y).len_chars() - 1);
-        let new_cursor = self.text.line_to_char(new_y);
-
-        self.get_movement_x(new_cursor, new_x as i32)
-    }
-
-    pub fn move_y(&mut self, y: i32) {
-        self.cursor = self.get_movement_y(self.cursor, y);
-    }
-
-    pub fn get_end_of_line_cursor(&self, cursor: Cursor) -> Cursor {
-        let y = self.text.char_to_line(cursor);
-        let line_start = self.text.line_to_byte(y);
-        let line_length = self.text.line(y).len_chars();
-        line_start + line_length - 1
-    }
-}
 
 const INPUT_DELAY: f32 = 0.05;
 
@@ -303,9 +98,11 @@ print('!')"#;
     State {
         font,
         line_height: 16.0,
-
-        cursor: 0,
-        text: ropey::Rope::from(text_string),
+    
+        buffer: Buffer {
+            cursor: 0,
+            text: ropey::Rope::from(text_string),
+        },
 
         mode: Mode::Normal,
 
@@ -322,8 +119,8 @@ fn event(state: &mut State, event: Event) {
     if state.mode == Mode::Insert {
         match event {
             Event::ReceivedCharacter(c) if c != '\u{7f}' && !c.is_control() => {
-                state.text.insert_char(state.cursor, c);
-                state.move_x(1);
+                state.buffer.text.insert_char(state.buffer.cursor, c);
+                state.buffer.move_x(1);
             }
             _ => {}
         }
@@ -372,7 +169,6 @@ fn get_motion_input(app: &App, state: &mut State) -> Option<Motion> {
 }
 
 fn update(app: &mut App, state: &mut State) {
-
     if app.keyboard.was_pressed(KeyCode::Return) && app.keyboard.alt() {
         let is_fullscreen = app.window().is_fullscreen();
         app.window().set_fullscreen(!is_fullscreen);
@@ -408,7 +204,7 @@ fn update(app: &mut App, state: &mut State) {
             }
             ModeChange::InsertAfter => {
                 state.mode = Mode::Insert;
-                state.move_x(1);
+                state.buffer.move_x(1);
             }
             ModeChange::InsertEnd => {
                 state.mode = Mode::Insert;
@@ -427,30 +223,30 @@ fn update(app: &mut App, state: &mut State) {
             let action = state.action.clone();
 
             if let Some(motion) = get_motion_input(app, state) {
-                let target = motion.get_target(state);
+                let target = motion.get_target(&state.buffer);
                 if let Some(action) = action {
                     match action {
                         Action::Delete => {
-                            if state.cursor <= target {
-                                state.text.remove(state.cursor..target);
+                            if state.buffer.cursor <= target {
+                                state.buffer.text.remove(state.buffer.cursor..target);
                             } else {
-                                state.text.remove(target..state.cursor);
-                                state.cursor = target;
+                                state.buffer.text.remove(target..state.buffer.cursor);
+                                state.buffer.cursor = target;
                             }
                         }
                         Action::Replace => {
                             state.mode = Mode::Insert;
-                            if state.cursor <= target {
-                                state.text.remove(state.cursor..target);
+                            if state.buffer.cursor <= target {
+                                state.buffer.text.remove(state.buffer.cursor..target);
                             } else {
-                                state.text.remove(target..state.cursor);
-                                state.cursor = target;
+                                state.buffer.text.remove(target..state.buffer.cursor);
+                                state.buffer.cursor = target;
                             }
                         }
                     }
                     state.action = None;
                 } else {
-                    state.cursor = target;
+                    state.buffer.cursor = target;
                 }
             }
 
@@ -468,14 +264,14 @@ fn update(app: &mut App, state: &mut State) {
             }
 
             if app.keyboard.was_pressed(KeyCode::A) {
-                state.move_x(1);
+                state.buffer.move_x(1);
                 state.mode = Mode::Insert;
                 return;
             }
 
             if app.keyboard.was_pressed(KeyCode::X) {
-                state.text.remove(state.cursor..state.cursor + 1);
-                state.move_x(0);
+                state.buffer.text.remove(state.buffer.cursor..state.buffer.cursor + 1);
+                state.buffer.move_x(0);
             }
         }
         Mode::Insert => {
@@ -485,15 +281,15 @@ fn update(app: &mut App, state: &mut State) {
             // }
 
             if was_pressed_or_held(app, state, KeyCode::Back) {
-                if state.cursor > 0 {
-                    state.text.remove(state.cursor - 1..state.cursor);
-                    state.move_x(-1);
+                if state.buffer.cursor > 0 {
+                    state.buffer.text.remove(state.buffer.cursor - 1..state.buffer.cursor);
+                    state.buffer.move_x(-1);
                 }
             }
 
             if was_pressed_or_held(app, state, KeyCode::Return) {
-                state.text.insert_char(state.cursor, '\n');
-                state.move_x(1)
+                state.buffer.text.insert_char(state.buffer.cursor, '\n');
+                state.buffer.move_x(1)
             }
         }
     }
@@ -507,10 +303,10 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
     let bounds = draw.last_text_bounds();
     let char_width = bounds.width;
 
-    let cursor_line = state.text.char_to_line(state.cursor);
-    let cursor_line_position = state.find_line_position(state.cursor);
+    let cursor_line = state.buffer.text.char_to_line(state.buffer.cursor);
+    let cursor_line_position = state.buffer.find_line_position(state.buffer.cursor);
 
-    for (index, line) in state.text.lines().enumerate() {
+    for (index, line) in state.buffer.text.lines().enumerate() {
         let y_position = index as f32 * state.line_height;
 
         draw.text(&state.font, &line.to_string())
