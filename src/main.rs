@@ -18,6 +18,7 @@ use notan::prelude::*;
 use notan_egui::{EguiConfig, EguiPluginSugar};
 
 const TAB_SIZE: usize = 4;
+const COMMAND_BOX_HEIGHT: f32 = 20.0;
 #[notan_main]
 fn main() -> Result<(), String> {
     let win = WindowConfig::new()
@@ -81,6 +82,7 @@ print('!')"#;
     normal_mode_change_bindings.insert(Shortcut::new(KeyCode::A).shift(), ModeChange::InsertEnd);
     normal_mode_change_bindings.insert(Shortcut::new(KeyCode::A), ModeChange::InsertAfter);
     normal_mode_change_bindings.insert(Shortcut::new(KeyCode::I).shift(), ModeChange::InsertStart);
+    normal_mode_change_bindings.insert(Shortcut::new(KeyCode::Semicolon).shift(), ModeChange::EnterCommand);
 
     insert_mode_change_bindings.insert(Shortcut::new(KeyCode::Escape), ModeChange::Escape);
     insert_mode_change_bindings.insert(Shortcut::new(KeyCode::LBracket).ctrl(), ModeChange::Escape);
@@ -216,6 +218,9 @@ fn update(app: &mut App, state: &mut State) {
             ModeChange::Escape => {
                 state.mode = Mode::Normal;
             }
+            ModeChange::EnterCommand => {
+                state.mode = Mode::Command;
+            }
         }
         return;
     }
@@ -348,6 +353,11 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
                 Mode::Command => {}
             }
         }
+    }
+
+    if state.mode == Mode::Command {
+        let (w, h) = gfx.size();
+        draw.rect((0.0, h as f32 - COMMAND_BOX_HEIGHT), (w as f32, h as f32));
     }
     gfx.render(&draw);
 }

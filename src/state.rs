@@ -46,6 +46,7 @@ pub enum ModeChange {
     InsertEnd,
     InsertStart,
     Escape,
+    EnterCommand,
 }
 
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
