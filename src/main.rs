@@ -1,14 +1,14 @@
 mod action;
+mod buffer;
 mod io;
 mod motion;
 mod state;
-mod buffer;
 
-use io::{load, save};
-use state::*;
 use action::*;
-use motion::*;
 use buffer::Buffer;
+use io::{load, save};
+use motion::*;
+use state::*;
 
 use std::collections::HashMap;
 
@@ -17,8 +17,7 @@ use notan::draw::*;
 use notan::prelude::*;
 use notan_egui::{EguiConfig, EguiPluginSugar};
 
-const INPUT_DELAY: f32 = 0.05;
-
+const TAB_SIZE: usize = 4;
 #[notan_main]
 fn main() -> Result<(), String> {
     let win = WindowConfig::new()
@@ -98,7 +97,7 @@ print('!')"#;
     State {
         font,
         line_height: 16.0,
-    
+
         buffer: Buffer {
             cursor: 0,
             text: ropey::Rope::from(text_string),
@@ -167,6 +166,8 @@ fn get_motion_input(app: &App, state: &mut State) -> Option<Motion> {
     }
     result
 }
+
+fn execute_command(state: &mut State) {}
 
 fn update(app: &mut App, state: &mut State) {
     if app.keyboard.was_pressed(KeyCode::Return) && app.keyboard.alt() {
@@ -250,11 +251,6 @@ fn update(app: &mut App, state: &mut State) {
                 }
             }
 
-            // if app.keyboard.is_down(KeyCode::I) {
-            //     state.mode = Mode::Insert;
-            //     return;
-            // }
-
             if was_pressed_or_held(app, state, KeyCode::Equals) && app.keyboard.ctrl() {
                 state.line_height += 1f32;
             }
@@ -270,19 +266,20 @@ fn update(app: &mut App, state: &mut State) {
             }
 
             if app.keyboard.was_pressed(KeyCode::X) {
-                state.buffer.text.remove(state.buffer.cursor..state.buffer.cursor + 1);
+                state
+                    .buffer
+                    .text
+                    .remove(state.buffer.cursor..state.buffer.cursor + 1);
                 state.buffer.move_x(0);
             }
         }
         Mode::Insert => {
-            // if app.keyboard.was_pressed(KeyCode::Escape) {
-            //     state.mode = Mode::Normal;
-            //     return;
-            // }
-
             if was_pressed_or_held(app, state, KeyCode::Back) {
                 if state.buffer.cursor > 0 {
-                    state.buffer.text.remove(state.buffer.cursor - 1..state.buffer.cursor);
+                    state
+                        .buffer
+                        .text
+                        .remove(state.buffer.cursor - 1..state.buffer.cursor);
                     state.buffer.move_x(-1);
                 }
             }
@@ -290,6 +287,20 @@ fn update(app: &mut App, state: &mut State) {
             if was_pressed_or_held(app, state, KeyCode::Return) {
                 state.buffer.text.insert_char(state.buffer.cursor, '\n');
                 state.buffer.move_x(1)
+            }
+
+            if was_pressed_or_held(app, state, KeyCode::Tab) {
+                state
+                    .buffer
+                    .text
+                    .insert(state.buffer.cursor, &" ".repeat(TAB_SIZE));
+                state.buffer.move_x(TAB_SIZE as i32);
+            }
+        }
+
+        Mode::Command => {
+            if was_pressed_or_held(app, state, KeyCode::Return) {
+                execute_command(state);
             }
         }
     }
@@ -326,6 +337,7 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
                         (x_position, y_position + state.line_height),
                     );
                 }
+                Mode::Command => {}
             }
         }
     }

@@ -52,7 +52,9 @@ pub enum ModeChange {
 pub enum Mode {
     Normal,
     Insert,
+    Command,
 }
+
 pub type KeyBindings<T> = HashMap<Shortcut, T>;
 pub type ActionBindings = KeyBindings<Action>;
 pub type MotionBindings = KeyBindings<Motion>;
