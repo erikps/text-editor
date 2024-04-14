@@ -53,15 +53,17 @@ fn setup(app: &mut App, gfx: &mut Graphics, plugins: &mut Plugins) -> State {
         .create_font(include_bytes!("assets/FiraCode-Regular.ttf"))
         .unwrap();
 
-    let text_string = r#"print('Hello World')
-print('!=')
-print('!')
-print('!')
-print('!')
-print('!')
-print('!')
-print('!')
-print('!')"#;
+    let text_string = r#"def fib(number):
+    if number == 0:
+        return 0
+    prev, current = 0, 1
+    for _ in range(number - 1):
+        temp = current
+        current += prev
+        prev = temp
+    return current
+
+print(fib(0))"#;
 
     let mut action_bindings = ActionBindings::new();
     let mut motion_bindings = MotionBindings::new();
@@ -389,9 +391,12 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
     let mut draw = gfx.create_draw();
     draw.clear(Color::BLACK);
 
-    draw.text(&state.font, "0").color(Color::TRANSPARENT);
+    draw.text(&state.font, "0")
+        .color(Color::TRANSPARENT)
+        .size(state.line_height);
     let bounds = draw.last_text_bounds();
     let char_width = bounds.width;
+    println!("{}", char_width);
 
     let cursor_line = state.buffer.text.char_to_line(state.buffer.cursor);
     let cursor_line_position = state.buffer.find_line_position(state.buffer.cursor);
@@ -477,7 +482,8 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
         draw.rect((0.0, h as f32 - COMMAND_BOX_HEIGHT), (w as f32, h as f32));
         draw.text(&state.font, &state.command_line)
             .position(0.0, h as f32 - COMMAND_BOX_HEIGHT)
-            .color(Color::BLACK);
+            .color(Color::BLACK)
+            .size(state.line_height);
     }
     gfx.render(&draw);
 }
