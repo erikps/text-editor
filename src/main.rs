@@ -20,6 +20,8 @@ use notan_egui::{EguiConfig, EguiPluginSugar};
 
 const TAB_SIZE: usize = 4;
 const COMMAND_BOX_HEIGHT: f32 = 20.0;
+const SHOW_LINE_NUMBERS: bool = true;
+
 #[notan_main]
 fn main() -> Result<(), String> {
     let win = WindowConfig::new()
@@ -29,7 +31,8 @@ fn main() -> Result<(), String> {
         .set_resizable(true)
         .set_vsync(true)
         .set_lazy_loop(true)
-        .set_high_dpi(true);
+        .set_high_dpi(true)
+        .set_title("Text Editor");
 
     notan::init_with(setup)
         .add_config(DrawConfig)
@@ -199,7 +202,6 @@ fn execute_command(state: &mut State) {
                 let result = save(&state.buffer.text, string);
                 println!("{:#}", result.is_ok());
             }
-
         }
         _ => {}
     }
@@ -369,11 +371,25 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
     let cursor_line = state.buffer.text.char_to_line(state.buffer.cursor);
     let cursor_line_position = state.buffer.find_line_position(state.buffer.cursor);
 
+    let line_count = state.buffer.text.len_lines() - 1;
+    let line_number_digit_count = line_count.to_string().len();
+    let line_number_offset = if SHOW_LINE_NUMBERS {
+        line_number_digit_count as f32 * char_width + 4f32
+    } else {
+        0f32
+    };
+
     for (index, line) in state.buffer.text.lines().enumerate() {
         let y_position = index as f32 * state.line_height;
 
-        draw.text(&state.font, &line.to_string())
+        let line_number = format!("{:>width$}", &index.to_string(), width=line_number_digit_count);
+        draw.text(&state.font, &line_number)
             .position(0.0, y_position)
+            .size(state.line_height)
+            .color(Color::GRAY);
+
+        draw.text(&state.font, &line.to_string())
+            .position(line_number_offset, y_position)
             .size(state.line_height);
 
         if cursor_line == index {
@@ -381,12 +397,18 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
 
             match state.mode {
                 Mode::Normal => {
-                    draw.rect((x_position, y_position), (char_width, state.line_height));
+                    draw.rect(
+                        (x_position + line_number_offset, y_position),
+                        (char_width, state.line_height),
+                    );
                 }
                 Mode::Insert => {
                     draw.line(
-                        (x_position, y_position),
-                        (x_position, y_position + state.line_height),
+                        (x_position + line_number_offset, y_position),
+                        (
+                            x_position + line_number_offset,
+                            y_position + state.line_height,
+                        ),
                     );
                 }
                 Mode::Command => {}

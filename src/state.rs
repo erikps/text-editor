@@ -1,8 +1,8 @@
-use crate::buffer::{Cursor, Buffer};
-use notan::prelude::{KeyCode, AppState};
-use notan::draw::Font;
 use crate::action::Action;
+use crate::buffer::{Buffer, Cursor};
 use crate::motion::Motion;
+use notan::draw::Font;
+use notan::prelude::{AppState, KeyCode};
 use std::collections::HashMap;
 
 #[derive(PartialEq, Eq, Hash)]
@@ -85,4 +85,3 @@ pub struct State {
     pub initial_movement_delay: f32,
     pub inter_movement_delay: f32,
 }
-
