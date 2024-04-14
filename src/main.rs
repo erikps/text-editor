@@ -363,6 +363,28 @@ fn update(app: &mut App, state: &mut State) {
     }
 }
 
+fn calculate_camera_offset(
+    cursor_x: usize,
+    cursor_y: usize,
+    char_width: f32,
+    char_height: f32,
+    screen_size: (u32, u32),
+) -> (f32, f32) {
+    let margin_x = 8;
+    let margin_y = 4;
+
+    let (cursor_x, cursor_y) = (
+        (cursor_x + margin_x + 1) as f32 * char_width,
+        (cursor_y + margin_y + 1) as f32 * char_height,
+    );
+
+    let (screen_x, screen_y) = screen_size;
+    (
+        -(cursor_x - screen_x as f32).max(0.0),
+        -(cursor_y - screen_y as f32).max(0.0),
+    )
+}
+
 fn draw(gfx: &mut Graphics, state: &mut State) {
     let mut draw = gfx.create_draw();
     draw.clear(Color::BLACK);
@@ -375,14 +397,62 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
     let cursor_line_position = state.buffer.find_line_position(state.buffer.cursor);
 
     let line_count = state.buffer.text.len_lines() - 1;
-    let line_number_digit_count = line_count.to_string().len();
+    let line_number_digit_count = line_count.to_string().len().max(3);
     let line_number_offset = if SHOW_LINE_NUMBERS {
-        line_number_digit_count as f32 * char_width + 4f32
+        line_number_digit_count as f32 * char_width + 4.0
     } else {
-        0f32
+        0.0
     };
 
+    let camera_offset = calculate_camera_offset(
+        cursor_line_position,
+        cursor_line,
+        char_width,
+        state.line_height,
+        gfx.size(),
+    );
+
     for (index, line) in state.buffer.text.lines().enumerate() {
+        let y_position = index as f32 * state.line_height;
+
+        // draw the line text
+        draw.text(&state.font, &line.to_string())
+            .position(
+                line_number_offset + camera_offset.0,
+                y_position + camera_offset.1,
+            )
+            .size(state.line_height);
+
+        if cursor_line == index {
+            let x_position = char_width * cursor_line_position as f32;
+
+            match state.mode {
+                Mode::Normal => {
+                    draw.rect(
+                        (
+                            x_position + line_number_offset + camera_offset.0,
+                            y_position + camera_offset.1,
+                        ),
+                        (char_width, state.line_height),
+                    );
+                }
+                Mode::Insert => {
+                    draw.line(
+                        (
+                            x_position + line_number_offset + camera_offset.0,
+                            y_position + camera_offset.1,
+                        ),
+                        (
+                            x_position + line_number_offset + camera_offset.0,
+                            y_position + state.line_height + camera_offset.1,
+                        ),
+                    );
+                }
+                Mode::Command => {}
+            }
+        }
+    }
+    for (index, _) in state.buffer.text.lines().enumerate() {
         let y_position = index as f32 * state.line_height;
 
         if SHOW_LINE_NUMBERS {
@@ -395,37 +465,9 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
 
             // draw the line number
             draw.text(&state.font, &line_number)
-                .position(0.0, y_position)
+                .position(0.0 + camera_offset.0, y_position + camera_offset.1)
                 .size(state.line_height)
                 .color(Color::GRAY);
-        }
-
-        // draw the line text
-        draw.text(&state.font, &line.to_string())
-            .position(line_number_offset, y_position)
-            .size(state.line_height);
-
-        if cursor_line == index {
-            let x_position = char_width * cursor_line_position as f32;
-
-            match state.mode {
-                Mode::Normal => {
-                    draw.rect(
-                        (x_position + line_number_offset, y_position),
-                        (char_width, state.line_height),
-                    );
-                }
-                Mode::Insert => {
-                    draw.line(
-                        (x_position + line_number_offset, y_position),
-                        (
-                            x_position + line_number_offset,
-                            y_position + state.line_height,
-                        ),
-                    );
-                }
-                Mode::Command => {}
-            }
         }
     }
 
