@@ -73,6 +73,7 @@ pub struct State {
     pub line_height: f32,
 
     pub buffer: Buffer,
+    pub command_line: String,
 
     pub mode: Mode,
 

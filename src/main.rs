@@ -8,6 +8,7 @@ use action::*;
 use buffer::Buffer;
 use io::{load, save};
 use motion::*;
+use notan_egui::TextBuffer;
 use state::*;
 
 use std::collections::HashMap;
@@ -64,6 +65,7 @@ print('!')"#;
     let mut mode_change_bindings: HashMap<Mode, ModeChangeBindings> = HashMap::new();
     let mut insert_mode_change_bindings = ModeChangeBindings::new();
     let mut normal_mode_change_bindings = ModeChangeBindings::new();
+    let mut command_mode_change_bindings = ModeChangeBindings::new();
 
     action_bindings.insert(Shortcut::new(KeyCode::D), Action::Delete);
     action_bindings.insert(Shortcut::new(KeyCode::C), Action::Replace);
@@ -82,13 +84,21 @@ print('!')"#;
     normal_mode_change_bindings.insert(Shortcut::new(KeyCode::A).shift(), ModeChange::InsertEnd);
     normal_mode_change_bindings.insert(Shortcut::new(KeyCode::A), ModeChange::InsertAfter);
     normal_mode_change_bindings.insert(Shortcut::new(KeyCode::I).shift(), ModeChange::InsertStart);
-    normal_mode_change_bindings.insert(Shortcut::new(KeyCode::Semicolon).shift(), ModeChange::EnterCommand);
+    normal_mode_change_bindings.insert(
+        Shortcut::new(KeyCode::Semicolon).shift(),
+        ModeChange::EnterCommand,
+    );
 
     insert_mode_change_bindings.insert(Shortcut::new(KeyCode::Escape), ModeChange::Escape);
     insert_mode_change_bindings.insert(Shortcut::new(KeyCode::LBracket).ctrl(), ModeChange::Escape);
 
+    command_mode_change_bindings.insert(Shortcut::new(KeyCode::Escape), ModeChange::Escape);
+    command_mode_change_bindings
+        .insert(Shortcut::new(KeyCode::LBracket).ctrl(), ModeChange::Escape);
+
     mode_change_bindings.insert(Mode::Normal, normal_mode_change_bindings);
     mode_change_bindings.insert(Mode::Insert, insert_mode_change_bindings);
+    mode_change_bindings.insert(Mode::Command, command_mode_change_bindings);
 
     let keymap = Keymap {
         motion_bindings,
@@ -104,6 +114,7 @@ print('!')"#;
             cursor: 0,
             text: ropey::Rope::from(text_string),
         },
+        command_line: String::new(),
 
         mode: Mode::Normal,
 
@@ -117,14 +128,22 @@ print('!')"#;
 }
 
 fn event(state: &mut State, event: Event) {
-    if state.mode == Mode::Insert {
-        match event {
+    match state.mode {
+        Mode::Normal => {}
+        Mode::Insert => match event {
             Event::ReceivedCharacter(c) if c != '\u{7f}' && !c.is_control() => {
                 state.buffer.text.insert_char(state.buffer.cursor, c);
                 state.buffer.move_x(1);
             }
             _ => {}
-        }
+        },
+        Mode::Command => match event {
+            Event::ReceivedCharacter(c) if c != '\u{7f}' && !c.is_control() => {
+                state.command_line.push(c);
+                println!("{}", &state.command_line);
+            }
+            _ => {}
+        },
     }
 }
 
@@ -169,7 +188,25 @@ fn get_motion_input(app: &App, state: &mut State) -> Option<Motion> {
     result
 }
 
-fn execute_command(state: &mut State) {}
+fn execute_command(state: &mut State) {
+    println!("{}", state.command_line);
+
+    match state.command_line.clone() {
+        x if x.get(1..2) == Some("w") => {
+            let mut splits = x.split(" ");
+            splits.next();
+            if let Some(string) = splits.next() {
+                let result = save(&state.buffer.text, string);
+                println!("{:#}", result.is_ok());
+            }
+
+        }
+        _ => {}
+    }
+
+    state.command_line.clear();
+    state.mode = Mode::Normal;
+}
 
 fn update(app: &mut App, state: &mut State) {
     if app.keyboard.was_pressed(KeyCode::Return) && app.keyboard.alt() {
@@ -194,7 +231,7 @@ fn update(app: &mut App, state: &mut State) {
             let alt = shortcut.alt == app.keyboard.alt();
             let modifiers_satisfied = shift && control && alt;
 
-            if app.keyboard.was_pressed(shortcut.key) && modifiers_satisfied {
+            if mode == state.mode && app.keyboard.was_pressed(shortcut.key) && modifiers_satisfied {
                 enacted_mode_change = Some((mode_change).clone());
             }
         }
@@ -220,6 +257,8 @@ fn update(app: &mut App, state: &mut State) {
             }
             ModeChange::EnterCommand => {
                 state.mode = Mode::Command;
+                state.command_line.clear();
+                state.command_line.push(':');
             }
         }
         return;
@@ -355,9 +394,13 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
         }
     }
 
+    // render command line at the bottom of the screen
     if state.mode == Mode::Command {
         let (w, h) = gfx.size();
         draw.rect((0.0, h as f32 - COMMAND_BOX_HEIGHT), (w as f32, h as f32));
+        draw.text(&state.font, &state.command_line)
+            .position(0.0, h as f32 - COMMAND_BOX_HEIGHT)
+            .color(Color::BLACK);
     }
     gfx.render(&draw);
 }
