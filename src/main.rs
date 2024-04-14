@@ -1,8 +1,12 @@
 mod action;
 mod buffer;
+mod highlight;
 mod io;
 mod motion;
 mod state;
+
+use highlight::convert_color;
+use highlight::highlight;
 
 use action::*;
 use buffer::Buffer;
@@ -19,14 +23,14 @@ use notan::prelude::*;
 use notan_egui::{EguiConfig, EguiPluginSugar};
 
 const TAB_SIZE: usize = 4;
-const COMMAND_BOX_HEIGHT: f32 = 20.0;
+const COMMAND_BOX_PADDING: f32 = 4.0;
 const SHOW_LINE_NUMBERS: bool = true;
 
 #[notan_main]
 fn main() -> Result<(), String> {
     let win = WindowConfig::new()
         .set_min_size(0, 0)
-        .set_size(800, 600)
+        .set_size(800, 400)
         .set_position(0, 0)
         .set_resizable(true)
         .set_vsync(true)
@@ -145,7 +149,6 @@ fn event(state: &mut State, event: Event) {
         Mode::Command => match event {
             Event::ReceivedCharacter(c) if c != '\u{7f}' && !c.is_control() => {
                 state.command_line.push(c);
-                println!("{}", &state.command_line);
             }
             _ => {}
         },
@@ -361,6 +364,13 @@ fn update(app: &mut App, state: &mut State) {
             if was_pressed_or_held(app, state, KeyCode::Return) {
                 execute_command(state);
             }
+
+            if was_pressed_or_held(app, state, KeyCode::Back) {
+                state.command_line.pop();
+                if state.command_line.is_empty() {
+                    state.mode = Mode::Normal;
+                }
+            }
         }
     }
 }
@@ -396,7 +406,6 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
         .size(state.line_height);
     let bounds = draw.last_text_bounds();
     let char_width = bounds.width;
-    println!("{}", char_width);
 
     let cursor_line = state.buffer.text.char_to_line(state.buffer.cursor);
     let cursor_line_position = state.buffer.find_line_position(state.buffer.cursor);
@@ -417,47 +426,71 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
         gfx.size(),
     );
 
-    for (index, line) in state.buffer.text.lines().enumerate() {
+    let highlighted_lines = highlight(&state.buffer.text, "py");
+
+    // draw highlighted text
+    for (index, line) in highlighted_lines.iter().enumerate() {
         let y_position = index as f32 * state.line_height;
-
-        // draw the line text
-        draw.text(&state.font, &line.to_string())
-            .position(
-                line_number_offset + camera_offset.0,
+        let mut char_index = 0usize;
+        for (style, fragment) in line {
+            let x_position = char_index as f32 * char_width;
+            let text_position = (
+                line_number_offset + camera_offset.0 + x_position,
                 y_position + camera_offset.1,
-            )
-            .size(state.line_height);
+            );
+            draw.text(&state.font, &fragment)
+                .position(text_position.0, text_position.1)
+                .size(state.line_height)
+                .color(convert_color(style.foreground));
 
-        if cursor_line == index {
-            let x_position = char_width * cursor_line_position as f32;
-
-            match state.mode {
-                Mode::Normal => {
-                    draw.rect(
-                        (
-                            x_position + line_number_offset + camera_offset.0,
-                            y_position + camera_offset.1,
-                        ),
-                        (char_width, state.line_height),
-                    );
-                }
-                Mode::Insert => {
-                    draw.line(
-                        (
-                            x_position + line_number_offset + camera_offset.0,
-                            y_position + camera_offset.1,
-                        ),
-                        (
-                            x_position + line_number_offset + camera_offset.0,
-                            y_position + state.line_height + camera_offset.1,
-                        ),
-                    );
-                }
-                Mode::Command => {}
-            }
+            let word_length = fragment.chars().count();
+            char_index += word_length;
         }
     }
-    for (index, _) in state.buffer.text.lines().enumerate() {
+
+    // render cursor
+    {
+        let x_position = char_width * cursor_line_position as f32;
+        let y_position = state.line_height * cursor_line as f32;
+
+        match state.mode {
+            Mode::Normal => {
+                draw.rect(
+                    (
+                        x_position + line_number_offset + camera_offset.0,
+                        y_position + camera_offset.1,
+                    ),
+                    (char_width, state.line_height),
+                );
+            }
+            Mode::Insert => {
+                draw.line(
+                    (
+                        x_position + line_number_offset + camera_offset.0,
+                        y_position + camera_offset.1,
+                    ),
+                    (
+                        x_position + line_number_offset + camera_offset.0,
+                        y_position + state.line_height + camera_offset.1,
+                    ),
+                );
+            }
+            Mode::Command => {}
+        }
+    }
+
+    // render line nubmer background
+    draw.rect(
+        (0.0, 0.0),
+        (
+            line_number_digit_count as f32 * char_width + 2.0,
+            gfx.size().1 as f32,
+        ),
+    )
+    .color(Color::BLACK);
+
+    // render line numbers
+    for index in 0..line_count + 1 {
         let y_position = index as f32 * state.line_height;
 
         if SHOW_LINE_NUMBERS {
@@ -470,7 +503,7 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
 
             // draw the line number
             draw.text(&state.font, &line_number)
-                .position(0.0 + camera_offset.0, y_position + camera_offset.1)
+                .position(0.0, y_position + camera_offset.1)
                 .size(state.line_height)
                 .color(Color::GRAY);
         }
@@ -479,9 +512,15 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
     // render command line at the bottom of the screen
     if state.mode == Mode::Command {
         let (w, h) = gfx.size();
-        draw.rect((0.0, h as f32 - COMMAND_BOX_HEIGHT), (w as f32, h as f32));
+        draw.rect(
+            (0.0, h as f32 - COMMAND_BOX_PADDING - state.line_height),
+            (w as f32, h as f32),
+        );
         draw.text(&state.font, &state.command_line)
-            .position(0.0, h as f32 - COMMAND_BOX_HEIGHT)
+            .position(
+                0.0,
+                h as f32 - state.line_height - COMMAND_BOX_PADDING / 2.0,
+            )
             .color(Color::BLACK)
             .size(state.line_height);
     }
