@@ -23,7 +23,7 @@ use notan::prelude::*;
 use notan_egui::{EguiConfig, EguiPluginSugar};
 
 const TAB_SIZE: usize = 4;
-const COMMAND_BOX_PADDING: f32 = 4.0;
+const COMMAND_BOX_PADDING: f32 = 8.0;
 const SHOW_LINE_NUMBERS: bool = true;
 
 #[notan_main]
@@ -398,8 +398,10 @@ fn calculate_camera_offset(
 }
 
 fn draw(gfx: &mut Graphics, state: &mut State) {
+    let (theme, highlighted_lines) = highlight(&state.buffer.text, "py", "base16-ocean.dark");
+
     let mut draw = gfx.create_draw();
-    draw.clear(Color::BLACK);
+    draw.clear(convert_color(theme.settings.background.unwrap()));
 
     draw.text(&state.font, "0")
         .color(Color::TRANSPARENT)
@@ -426,12 +428,11 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
         gfx.size(),
     );
 
-    let highlighted_lines = highlight(&state.buffer.text, "py");
-
     // draw highlighted text
     for (index, line) in highlighted_lines.iter().enumerate() {
         let y_position = index as f32 * state.line_height;
         let mut char_index = 0usize;
+
         for (style, fragment) in line {
             let x_position = char_index as f32 * char_width;
             let text_position = (
@@ -452,6 +453,7 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
     {
         let x_position = char_width * cursor_line_position as f32;
         let y_position = state.line_height * cursor_line as f32;
+        let cursor_color = convert_color(theme.settings.caret.unwrap());
 
         match state.mode {
             Mode::Normal => {
@@ -461,7 +463,8 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
                         y_position + camera_offset.1,
                     ),
                     (char_width, state.line_height),
-                );
+                )
+                .color(cursor_color);
             }
             Mode::Insert => {
                 draw.line(
@@ -473,13 +476,15 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
                         x_position + line_number_offset + camera_offset.0,
                         y_position + state.line_height + camera_offset.1,
                     ),
-                );
+                )
+                .color(cursor_color);
             }
             Mode::Command => {}
         }
     }
 
-    // render line nubmer background
+    // render line number background
+    let number_background_color = convert_color(theme.settings.background.unwrap());
     draw.rect(
         (0.0, 0.0),
         (
@@ -487,7 +492,7 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
             gfx.size().1 as f32,
         ),
     )
-    .color(Color::BLACK);
+    .color(number_background_color);
 
     // render line numbers
     for index in 0..line_count + 1 {
@@ -515,13 +520,20 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
         draw.rect(
             (0.0, h as f32 - COMMAND_BOX_PADDING - state.line_height),
             (w as f32, h as f32),
-        );
+        )
+        .color(convert_color(theme.settings.background.unwrap()));
+
+        draw.line(
+            (0.0, h as f32 - COMMAND_BOX_PADDING - state.line_height),
+            (w as f32, h as f32 - COMMAND_BOX_PADDING - state.line_height),
+        ).color(convert_color(theme.settings.guide.unwrap()));
+
         draw.text(&state.font, &state.command_line)
             .position(
                 0.0,
                 h as f32 - state.line_height - COMMAND_BOX_PADDING / 2.0,
             )
-            .color(Color::BLACK)
+            .color(convert_color(theme.settings.foreground.unwrap()))
             .size(state.line_height);
     }
     gfx.render(&draw);
