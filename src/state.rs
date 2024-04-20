@@ -3,7 +3,10 @@ use crate::buffer::{Buffer, Cursor};
 use crate::motion::Motion;
 use notan::draw::Font;
 use notan::prelude::{AppState, KeyCode};
+use ropey::Rope;
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 #[derive(PartialEq, Eq, Hash)]
 pub struct Shortcut {
@@ -72,7 +75,8 @@ pub struct State {
     pub font: Font,
     pub line_height: f32,
 
-    pub buffer: Buffer,
+    pub buffers: Vec<Buffer>,
+    pub current_buffer_index: usize,
     pub command_line: String,
 
     pub mode: Mode,
@@ -84,4 +88,18 @@ pub struct State {
     pub last_time: f32,
     pub initial_movement_delay: f32,
     pub inter_movement_delay: f32,
+}
+
+impl State {
+    /// Get the currently selected buffer.
+    pub fn buffer(&mut self) -> &mut Buffer {
+        &mut self.buffers[self.current_buffer_index]
+    }
+
+    pub fn next_buffer(&mut self) {
+        self.current_buffer_index = (self.current_buffer_index + 1) % self.buffers.len();
+    }
+    pub fn previous_buffer(&mut self) {
+        self.current_buffer_index = (self.current_buffer_index - 1) % self.buffers.len();
+    }
 }

@@ -15,7 +15,9 @@ use motion::*;
 use notan_egui::TextBuffer;
 use state::*;
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use notan::app::Plugins;
 use notan::draw::*;
@@ -115,14 +117,24 @@ print(fib(0))"#;
         mode_change_bindings,
     };
 
+    let buffers = vec![
+        Buffer {
+            cursor: 0,
+            text: ropey::Rope::from(text_string),
+        },
+        Buffer {
+            cursor: 0,
+            text: ropey::Rope::from(String::from("print('Hello, it's me!')")),
+        },
+    ];
+
     State {
         font,
         line_height: 16.0,
 
-        buffer: Buffer {
-            cursor: 0,
-            text: ropey::Rope::from(text_string),
-        },
+        buffers,
+        current_buffer_index: 0,
+
         command_line: String::new(),
 
         mode: Mode::Normal,
@@ -137,12 +149,12 @@ print(fib(0))"#;
 }
 
 fn event(state: &mut State, event: Event) {
-    match state.mode {
+    match state.mode.clone() {
         Mode::Normal => {}
         Mode::Insert => match event {
             Event::ReceivedCharacter(c) if c != '\u{7f}' && !c.is_control() => {
-                state.buffer.text.insert_char(state.buffer.cursor, c);
-                state.buffer.move_x(1);
+                state.buffer().insert_after_cursor(c);
+                state.buffer().move_x(1);
             }
             _ => {}
         },
@@ -204,12 +216,18 @@ fn execute_command(state: &mut State) {
             let mut splits = x.split(" ");
             splits.next();
             if let Some(string) = splits.next() {
-                let result = save(&state.buffer.text, string);
+                let result = save(&state.buffer().text, string);
                 println!("{:#}", result.is_ok());
             }
         }
         x if x.get(1..2) == Some("q") => {
             std::process::exit(0);
+        }
+        x if x.get(1..3) == Some("bn") => {
+            state.next_buffer();
+        }
+        x if x.get(1..3) == Some("bb") => {
+            state.previous_buffer();
         }
         _ => {}
     }
@@ -254,7 +272,7 @@ fn update(app: &mut App, state: &mut State) {
             }
             ModeChange::InsertAfter => {
                 state.mode = Mode::Insert;
-                state.buffer.move_x(1);
+                state.buffer().move_x(1);
             }
             ModeChange::InsertEnd => {
                 state.mode = Mode::Insert;
@@ -278,30 +296,33 @@ fn update(app: &mut App, state: &mut State) {
             let action = state.action.clone();
 
             if let Some(motion) = get_motion_input(app, state) {
-                let target = motion.get_target(&state.buffer);
+                let target = motion.get_target(&state.buffer());
                 if let Some(action) = action {
                     match action {
                         Action::Delete => {
-                            if state.buffer.cursor <= target {
-                                state.buffer.text.remove(state.buffer.cursor..target);
+                            let reached_target = state.buffer().cursor <= target;
+                            let cursor = state.buffer().cursor;
+                            if reached_target {
+                                state.buffer().text.remove(cursor..target);
                             } else {
-                                state.buffer.text.remove(target..state.buffer.cursor);
-                                state.buffer.cursor = target;
+                                state.buffer().text.remove(target..cursor);
+                                state.buffer().cursor = target;
                             }
                         }
                         Action::Replace => {
                             state.mode = Mode::Insert;
-                            if state.buffer.cursor <= target {
-                                state.buffer.text.remove(state.buffer.cursor..target);
+                            let cursor = state.buffer().cursor;
+                            if cursor <= target {
+                                state.buffer().text.remove(cursor..target);
                             } else {
-                                state.buffer.text.remove(target..state.buffer.cursor);
-                                state.buffer.cursor = target;
+                                state.buffer().text.remove(target..cursor);
+                                state.buffer().cursor = target;
                             }
                         }
                     }
                     state.action = None;
                 } else {
-                    state.buffer.cursor = target;
+                    state.buffer().cursor = target;
                 }
             }
 
@@ -314,49 +335,41 @@ fn update(app: &mut App, state: &mut State) {
             }
 
             if app.keyboard.was_pressed(KeyCode::A) {
-                state.buffer.move_x(1);
+                state.buffer().move_x(1);
                 state.mode = Mode::Insert;
                 return;
             }
 
             if app.keyboard.was_pressed(KeyCode::X) {
-                state
-                    .buffer
-                    .text
-                    .remove(state.buffer.cursor..state.buffer.cursor + 1);
-                state.buffer.move_x(0);
+                let cursor = state.buffer().cursor;
+                state.buffer().text.remove(cursor..cursor + 1);
+                state.buffer().move_x(0);
             }
         }
         Mode::Insert => {
+            let cursor = state.buffer().cursor;
             if was_pressed_or_held(app, state, KeyCode::Back) {
-                if state.buffer.cursor > 0 {
-                    state
-                        .buffer
-                        .text
-                        .remove(state.buffer.cursor - 1..state.buffer.cursor);
-                    state.buffer.move_x(-1);
+                if cursor > 0 {
+                    state.buffer().text.remove(cursor - 1..cursor);
+                    state.buffer().move_x(-1);
                 }
             }
 
             if was_pressed_or_held(app, state, KeyCode::Return) {
-                state.buffer.text.insert_char(state.buffer.cursor, '\n');
-                state.buffer.move_x(1)
+                state.buffer().insert_after_cursor('\n');
+                state.buffer().move_x(1)
             }
 
             if was_pressed_or_held(app, state, KeyCode::Tab) {
-                state
-                    .buffer
-                    .text
-                    .insert(state.buffer.cursor, &" ".repeat(TAB_SIZE));
-                state.buffer.move_x(TAB_SIZE as i32);
+                let cursor = state.buffer().cursor;
+                state.buffer().text.insert(cursor, &" ".repeat(TAB_SIZE));
+                state.buffer().move_x(TAB_SIZE as i32);
             }
 
             if was_pressed_or_held(app, state, KeyCode::Delete) {
-                let length = state.buffer.text.len_chars();
-                state
-                    .buffer
-                    .text
-                    .remove(state.buffer.cursor..(state.buffer.cursor + 1).min(length));
+                let length = state.buffer().text.len_chars();
+                let cursor = state.buffer().cursor;
+                state.buffer().text.remove(cursor..(cursor + 1).min(length));
             }
         }
 
@@ -398,7 +411,7 @@ fn calculate_camera_offset(
 }
 
 fn draw(gfx: &mut Graphics, state: &mut State) {
-    let (theme, highlighted_lines) = highlight(&state.buffer.text, "py", "base16-ocean.dark");
+    let (theme, highlighted_lines) = highlight(&state.buffer().text, "py", "base16-ocean.dark");
 
     let mut draw = gfx.create_draw();
     draw.clear(convert_color(theme.settings.background.unwrap()));
@@ -409,13 +422,14 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
     let bounds = draw.last_text_bounds();
     let char_width = bounds.width;
 
-    let cursor_line = state.buffer.text.char_to_line(state.buffer.cursor);
-    let cursor_line_position = state.buffer.find_line_position(state.buffer.cursor);
+    let cursor = state.buffer().cursor;
+    let cursor_line = state.buffer().text.char_to_line(cursor);
+    let cursor_line_position = state.buffer().find_line_position(cursor);
 
-    let line_count = state.buffer.text.len_lines() - 1;
+    let line_count = state.buffer().text.len_lines() - 1;
     let line_number_digit_count = line_count.to_string().len().max(3);
     let line_number_offset = if SHOW_LINE_NUMBERS {
-        line_number_digit_count as f32 * char_width + 4.0
+        line_number_digit_count as f32 * char_width * 1.5
     } else {
         0.0
     };
@@ -526,7 +540,8 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
         draw.line(
             (0.0, h as f32 - COMMAND_BOX_PADDING - state.line_height),
             (w as f32, h as f32 - COMMAND_BOX_PADDING - state.line_height),
-        ).color(convert_color(theme.settings.guide.unwrap()));
+        )
+        .color(convert_color(theme.settings.guide.unwrap()));
 
         draw.text(&state.font, &state.command_line)
             .position(

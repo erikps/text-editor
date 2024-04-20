@@ -11,10 +11,6 @@ pub struct Buffer {
     pub cursor: Cursor,
 }
 
-pub struct Viewport {
-    pub buffer: Buffer,
-}
-
 impl Buffer {
     pub fn find_line_position(&self, cursor: Cursor) -> usize {
         // find the char index of the cursor within the current line
@@ -54,5 +50,9 @@ impl Buffer {
         let line_start = self.text.line_to_byte(y);
         let line_length = self.text.line(y).len_chars();
         line_start + line_length - 1
+    }
+
+    pub fn insert_after_cursor(&mut self, c: char) {
+        self.text.insert_char(self.cursor, c);
     }
 }
