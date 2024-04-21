@@ -9,9 +9,17 @@ pub fn cursor_add(cursor: Cursor, value: i32) -> Cursor {
 pub struct Buffer {
     pub text: Rope,
     pub cursor: Cursor,
+    pub filepath: Option<String>,
 }
 
 impl Buffer {
+    pub fn new(text: Rope, filepath: Option<String>) -> Self {
+        Buffer {
+            text,
+            cursor: 0,
+            filepath,
+        }
+    }
 
     pub fn find_line_position(&self, cursor: Cursor) -> usize {
         // find the char index of the cursor within the current line

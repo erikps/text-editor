@@ -114,11 +114,10 @@ impl Editor {
         }
     }
 
-    pub fn add_buffer(&mut self, rope: Rope) {
-        let buffer = Buffer {
-            text: rope,
-            cursor: 0,
-        };
+    pub fn add_buffer(&mut self, rope: Rope, filepath: Option<String>) {
+        let buffer = Buffer::new (
+            rope, filepath
+        );
         self.buffers.push(buffer);
         self.current_buffer_index = self.buffers.len() - 1;
     }

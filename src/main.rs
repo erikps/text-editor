@@ -119,14 +119,11 @@ print(fib(0))"#;
     };
 
     let buffers = vec![
-        Buffer {
-            cursor: 0,
-            text: ropey::Rope::from(text_string),
-        },
-        Buffer {
-            cursor: 0,
-            text: ropey::Rope::from(String::from("print('Hello, it\\'s me!')")),
-        },
+        Buffer::new(ropey::Rope::from(text_string), None),
+        Buffer::new(
+            ropey::Rope::from(String::from("print('Hello, it\\'s me!')")),
+            None,
+        ),
     ];
 
     let editor = Editor {
@@ -210,7 +207,6 @@ fn get_motion_input(app: &App, state: &mut State) -> Option<Motion> {
     }
     result
 }
-
 
 fn update(app: &mut App, state: &mut State) {
     if app.keyboard.was_pressed(KeyCode::Return) && app.keyboard.alt() {

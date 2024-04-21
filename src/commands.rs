@@ -1,20 +1,24 @@
+use core::panic;
+
 use crate::{
     io::{load, save},
     state::{Editor, State},
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum CommandParameterType {
     StringParameter,
     IntParameter,
     FloatParameter,
+    OptionalParameter(Box<CommandParameterType>),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum CommandParameter {
     StringParameter(String),
     IntParameter(i32),
     FloatParameter(f32),
+    OptionalParameter(Box<Option<CommandParameter>>),
 }
 
 type ExecuteCommand = dyn Fn(Vec<CommandParameter>, &mut Editor) -> bool;
@@ -31,12 +35,41 @@ impl Command {
         parameters: &[CommandParameterType],
         execute: Box<ExecuteCommand>,
     ) -> Self {
-        (Command {
+        Command {
             names: Vec::from_iter(names.iter().map(|s| String::from(*s))),
             parameters: Vec::from(parameters),
             execute,
-        })
+        }
     }
+}
+
+fn parse_parameter(
+    parameter_string: &str,
+    parameter_type: &CommandParameterType,
+) -> Result<CommandParameter, String> {
+    let param = match parameter_type {
+        CommandParameterType::StringParameter => {
+            CommandParameter::StringParameter((*parameter_string).to_owned())
+        }
+        CommandParameterType::FloatParameter => {
+            if let Ok(parsed_float) = parameter_string.parse() {
+                CommandParameter::FloatParameter(parsed_float)
+            } else {
+                return Err("Could not parse float".to_owned());
+            }
+        }
+        CommandParameterType::IntParameter => {
+            if let Ok(parsed_int) = parameter_string.parse() {
+                CommandParameter::IntParameter(parsed_int)
+            } else {
+                return Err("Could not parse int".to_owned());
+            }
+        }
+        CommandParameterType::OptionalParameter(optional_type) => {
+            parse_parameter(parameter_string, optional_type)?
+        }
+    };
+    Ok(param)
 }
 
 pub fn prepare_command(
@@ -58,33 +91,19 @@ pub fn prepare_command(
 
                     // iterate over expected parameters and construct a list of actual parameters
                     for param_index in 0..command.parameters.len() {
+                        let parameter_type = &command.parameters[param_index];
                         if let Some(parameter_string) = parameter_strings.get(param_index) {
-                            let parameter_type = &command.parameters[param_index];
-
-                            let parameter = match parameter_type {
-                                CommandParameterType::StringParameter => {
-                                    CommandParameter::StringParameter(
-                                        (*parameter_string).to_owned(),
-                                    )
-                                }
-                                CommandParameterType::FloatParameter => {
-                                    if let Ok(parsed_float) = parameter_string.parse() {
-                                        CommandParameter::FloatParameter(parsed_float)
-                                    } else {
-                                        return Err("Could not parse float".to_owned());
-                                    }
-                                }
-                                CommandParameterType::IntParameter => {
-                                    if let Ok(parsed_float) = parameter_string.parse() {
-                                        CommandParameter::IntParameter(parsed_float)
-                                    } else {
-                                        return Err("Could not parse int".to_owned());
-                                    }
-                                }
-                            };
-                            parameters.push(parameter);
+                            let parameter = parse_parameter(&parameter_string, parameter_type);
+                            if let Ok(parameter) = parameter {
+                                parameters.push(parameter);
+                            }
                         } else {
-                            return Err("Too few parameters provided".to_owned());
+                            match parameter_type {
+                                CommandParameterType::OptionalParameter(_) => {}
+                                _ => {
+                                    return Err("Too few parameters provided".to_owned());
+                                }
+                            }
                         }
                     }
 
@@ -103,12 +122,24 @@ pub fn get_standard_commands() -> Vec<Command> {
     vec![
         Command::new(
             &["w", "write"],
-            &[CommandParameterType::StringParameter],
+            &[CommandParameterType::OptionalParameter(Box::from(
+                CommandParameterType::StringParameter,
+            ))],
             Box::from(|params: Vec<CommandParameter>, editor: &mut Editor| {
-                if let Some(StringParameter(filepath)) = params.get(0) {
-                    save(&editor.buffer().text, &filepath).is_ok()
+                if let Some(OptionalParameter(path_parameter)) = params.get(0) {
+                    let filepath = path_parameter.clone().and_then(|param| match param {
+                        StringParameter(string) => Some(string),
+                        _ => None,
+                    });
+                    let result = save(editor.buffer(), filepath.clone());
+                    match result {
+                        Ok(_) => true,
+                        Err(e) => {
+                            false
+                        }
+                    }
                 } else {
-                    false
+                    save(editor.buffer(), None).is_ok()
                 }
             }),
         ),
@@ -119,11 +150,11 @@ pub fn get_standard_commands() -> Vec<Command> {
                 if let Some(StringParameter(filepath)) = params.get(0) {
                     match load(&filepath) {
                         Ok(rope) => {
-                            editor.add_buffer(rope);
+                            editor.add_buffer(rope, Some(filepath.clone()));
                             return true;
-                        } 
+                        }
                         Err(e) => {
-                            println!("{}", e); 
+                            println!("{}", e);
                         }
                     }
                 }
