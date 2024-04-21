@@ -1,5 +1,5 @@
 use crate::{
-    io::save,
+    io::{load, save},
     state::{Editor, State},
 };
 
@@ -110,6 +110,24 @@ pub fn get_standard_commands() -> Vec<Command> {
                 } else {
                     false
                 }
+            }),
+        ),
+        Command::new(
+            &["e", "edit"],
+            &[CommandParameterType::StringParameter],
+            Box::from(|params: Vec<CommandParameter>, editor: &mut Editor| {
+                if let Some(StringParameter(filepath)) = params.get(0) {
+                    match load(&filepath) {
+                        Ok(rope) => {
+                            editor.add_buffer(rope);
+                            return true;
+                        } 
+                        Err(e) => {
+                            println!("{}", e); 
+                        }
+                    }
+                }
+                false
             }),
         ),
         Command::new(

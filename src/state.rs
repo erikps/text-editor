@@ -113,4 +113,13 @@ impl Editor {
             self.current_buffer_index = self.current_buffer_index - 1;
         }
     }
+
+    pub fn add_buffer(&mut self, rope: Rope) {
+        let buffer = Buffer {
+            text: rope,
+            cursor: 0,
+        };
+        self.buffers.push(buffer);
+        self.current_buffer_index = self.buffers.len() - 1;
+    }
 }

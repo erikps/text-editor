@@ -16,10 +16,13 @@ pub fn save(rope: &Rope, filepath: &str) -> std::io::Result<()> {
 
 /// Read the file at filepath and return a rope
 pub fn load(filepath: &str) -> std::io::Result<Rope> {
-    let mut file = File::create(filepath)?;
+    let mut file = File::open(filepath)?;
+    println!("{}", filepath);
 
     let mut buffer_string = String::new();
     file.read_to_string(&mut buffer_string)?;
+
+    println!("{}", buffer_string);
 
     Ok(Rope::from_str(&buffer_string))
 }

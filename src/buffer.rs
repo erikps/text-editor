@@ -12,6 +12,7 @@ pub struct Buffer {
 }
 
 impl Buffer {
+
     pub fn find_line_position(&self, cursor: Cursor) -> usize {
         // find the char index of the cursor within the current line
         let line = self.text.byte_to_line(cursor);
