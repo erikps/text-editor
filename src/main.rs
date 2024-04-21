@@ -76,6 +76,7 @@ print(fib(0))"#;
     let mut insert_mode_change_bindings = ModeChangeBindings::new();
     let mut normal_mode_change_bindings = ModeChangeBindings::new();
     let mut command_mode_change_bindings = ModeChangeBindings::new();
+    let mut quick_menu_mode_change_bindings = ModeChangeBindings::new();
 
     action_bindings.insert(Shortcut::new(KeyCode::D), Action::Delete);
     action_bindings.insert(Shortcut::new(KeyCode::C), Action::Replace);
@@ -98,6 +99,7 @@ print(fib(0))"#;
         Shortcut::new(KeyCode::Semicolon).shift(),
         ModeChange::EnterCommand,
     );
+    normal_mode_change_bindings.insert(Shortcut::new(KeyCode::Space), ModeChange::EnterQuickMenu);
 
     insert_mode_change_bindings.insert(Shortcut::new(KeyCode::Escape), ModeChange::Escape);
     insert_mode_change_bindings.insert(Shortcut::new(KeyCode::LBracket).ctrl(), ModeChange::Escape);
@@ -106,9 +108,12 @@ print(fib(0))"#;
     command_mode_change_bindings
         .insert(Shortcut::new(KeyCode::LBracket).ctrl(), ModeChange::Escape);
 
+    quick_menu_mode_change_bindings.insert(Shortcut::new(KeyCode::Escape), ModeChange::Escape);
+
     mode_change_bindings.insert(Mode::Normal, normal_mode_change_bindings);
     mode_change_bindings.insert(Mode::Insert, insert_mode_change_bindings);
     mode_change_bindings.insert(Mode::Command, command_mode_change_bindings);
+    mode_change_bindings.insert(Mode::QuickMenu, quick_menu_mode_change_bindings);
 
     let commands = get_standard_commands();
 
@@ -130,6 +135,7 @@ print(fib(0))"#;
         buffers,
         current_buffer_index: 0,
         command_line: String::new(),
+        quick_menu_line: String::new(),
         mode: Mode::Normal,
         action: Option::None,
     };
@@ -161,6 +167,12 @@ fn event(state: &mut State, event: Event) {
         Mode::Command => match event {
             Event::ReceivedCharacter(c) if c != '\u{7f}' && !c.is_control() => {
                 state.editor.command_line.push(c);
+            }
+            _ => {}
+        },
+        Mode::QuickMenu => match event {
+            Event::ReceivedCharacter(c) if c != '\u{7f}' && !c.is_control() => {
+                state.editor.quick_menu_line.push(c);
             }
             _ => {}
         },
@@ -263,9 +275,14 @@ fn update(app: &mut App, state: &mut State) {
                 state.editor.command_line.clear();
                 state.editor.command_line.push(':');
             }
+            ModeChange::EnterQuickMenu => {
+                state.editor.mode = Mode::QuickMenu;
+                state.editor.quick_menu_line.clear();
+            }
         }
         return;
     }
+
     match state.editor.mode {
         Mode::Normal => {
             let action = state.editor.action.clone();
@@ -378,6 +395,12 @@ fn update(app: &mut App, state: &mut State) {
                 }
             }
         }
+
+        Mode::QuickMenu => {
+            if was_pressed_or_held(app, state, KeyCode::Back) {
+                state.editor.quick_menu_line.pop();
+            }
+        }
     }
 }
 
@@ -488,6 +511,7 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
                 .color(cursor_color);
             }
             Mode::Command => {}
+            Mode::QuickMenu => {}
         }
     }
 
@@ -545,5 +569,23 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
             .color(convert_color(theme.settings.foreground.unwrap()))
             .size(state.line_height);
     }
+
+    if state.editor.mode == Mode::QuickMenu {
+        // draw quick menu
+        let margin_x = 80.0;
+        let margin_y = 10.0;
+        let width = gfx.size().0 as f32 - margin_x * 2.0;
+        let height = gfx.size().1 as f32 - margin_y * 2.0;
+        draw.rect((margin_x, margin_y), (width, height))
+            .corner_radius(3.0)
+            .stroke(4.0)
+            .stroke_color(convert_color(theme.settings.guide.unwrap()))
+            .fill()
+            .fill_color(convert_color(theme.settings.background.unwrap()));
+        draw.text(&state.font, &state.editor.quick_menu_line)
+            .position(margin_x, margin_y)
+            .color(convert_color(theme.settings.foreground.unwrap()));
+    }
+
     gfx.render(&draw);
 }

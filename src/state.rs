@@ -51,6 +51,7 @@ pub enum ModeChange {
     InsertStart,
     Escape,
     EnterCommand,
+    EnterQuickMenu,
 }
 
 #[derive(Debug, PartialEq, Clone, Hash, Eq)]
@@ -58,6 +59,7 @@ pub enum Mode {
     Normal,
     Insert,
     Command,
+    QuickMenu,
 }
 
 pub type KeyBindings<T> = HashMap<Shortcut, T>;
@@ -75,6 +77,7 @@ pub struct Editor {
     pub buffers: Vec<Buffer>,
     pub current_buffer_index: usize,
     pub command_line: String,
+    pub quick_menu_line: String,
 
     pub mode: Mode,
 
