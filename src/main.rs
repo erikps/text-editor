@@ -1,10 +1,12 @@
 mod action;
 mod buffer;
+mod commands;
 mod highlight;
 mod io;
 mod motion;
 mod state;
 
+use commands::{get_standard_commands, prepare_command};
 use highlight::convert_color;
 use highlight::highlight;
 
@@ -12,12 +14,9 @@ use action::*;
 use buffer::Buffer;
 use io::{load, save};
 use motion::*;
-use notan_egui::TextBuffer;
 use state::*;
 
-use std::cell::Cell;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use notan::app::Plugins;
 use notan::draw::*;
@@ -111,6 +110,8 @@ print(fib(0))"#;
     mode_change_bindings.insert(Mode::Insert, insert_mode_change_bindings);
     mode_change_bindings.insert(Mode::Command, command_mode_change_bindings);
 
+    let commands = get_standard_commands();
+
     let keymap = Keymap {
         motion_bindings,
         action_bindings,
@@ -124,23 +125,25 @@ print(fib(0))"#;
         },
         Buffer {
             cursor: 0,
-            text: ropey::Rope::from(String::from("print('Hello, it's me!')")),
+            text: ropey::Rope::from(String::from("print('Hello, it\\'s me!')")),
         },
     ];
+
+    let editor = Editor {
+        buffers,
+        current_buffer_index: 0,
+        command_line: String::new(),
+        mode: Mode::Normal,
+        action: Option::None,
+    };
 
     State {
         font,
         line_height: 16.0,
 
-        buffers,
-        current_buffer_index: 0,
-
-        command_line: String::new(),
-
-        mode: Mode::Normal,
-
-        action: Option::None,
+        editor,
         keymap,
+        commands,
 
         last_time: 0.0,
         inter_movement_delay: 0.05,
@@ -149,18 +152,18 @@ print(fib(0))"#;
 }
 
 fn event(state: &mut State, event: Event) {
-    match state.mode.clone() {
+    match state.editor.mode.clone() {
         Mode::Normal => {}
         Mode::Insert => match event {
             Event::ReceivedCharacter(c) if c != '\u{7f}' && !c.is_control() => {
-                state.buffer().insert_after_cursor(c);
-                state.buffer().move_x(1);
+                state.editor.buffer().insert_after_cursor(c);
+                state.editor.buffer().move_x(1);
             }
             _ => {}
         },
         Mode::Command => match event {
             Event::ReceivedCharacter(c) if c != '\u{7f}' && !c.is_control() => {
-                state.command_line.push(c);
+                state.editor.command_line.push(c);
             }
             _ => {}
         },
@@ -177,8 +180,8 @@ fn was_pressed_or_held(app: &mut App, state: &mut State, key_code: KeyCode) -> b
     pressed
 }
 
-fn get_action_input(app: &App, state: &Keymap) -> Option<Action> {
-    for (shortcut, action) in state.action_bindings.iter() {
+fn get_action_input(app: &App, keymap: &Keymap) -> Option<Action> {
+    for (shortcut, action) in keymap.action_bindings.iter() {
         if app.keyboard.was_pressed(shortcut.key) {
             return Some(action.clone());
         }
@@ -208,33 +211,6 @@ fn get_motion_input(app: &App, state: &mut State) -> Option<Motion> {
     result
 }
 
-fn execute_command(state: &mut State) {
-    println!("{}", state.command_line);
-
-    match state.command_line.clone() {
-        x if x.get(1..2) == Some("w") => {
-            let mut splits = x.split(" ");
-            splits.next();
-            if let Some(string) = splits.next() {
-                let result = save(&state.buffer().text, string);
-                println!("{:#}", result.is_ok());
-            }
-        }
-        x if x.get(1..2) == Some("q") => {
-            std::process::exit(0);
-        }
-        x if x.get(1..3) == Some("bn") => {
-            state.next_buffer();
-        }
-        x if x.get(1..3) == Some("bb") => {
-            state.previous_buffer();
-        }
-        _ => {}
-    }
-
-    state.command_line.clear();
-    state.mode = Mode::Normal;
-}
 
 fn update(app: &mut App, state: &mut State) {
     if app.keyboard.was_pressed(KeyCode::Return) && app.keyboard.alt() {
@@ -242,11 +218,11 @@ fn update(app: &mut App, state: &mut State) {
         app.window().set_fullscreen(!is_fullscreen);
     }
 
-    if state.mode == Mode::Normal {
+    if state.editor.mode == Mode::Normal {
         // if there is a new action input, replace the previous
         let input_action = get_action_input(app, &state.keymap);
         if let Some(new_action) = input_action {
-            state.action = Some(new_action.clone());
+            state.editor.action = Some(new_action.clone());
             println!("{:?}", new_action);
         }
     }
@@ -259,7 +235,10 @@ fn update(app: &mut App, state: &mut State) {
             let alt = shortcut.alt == app.keyboard.alt();
             let modifiers_satisfied = shift && control && alt;
 
-            if mode == state.mode && app.keyboard.was_pressed(shortcut.key) && modifiers_satisfied {
+            if mode == state.editor.mode
+                && app.keyboard.was_pressed(shortcut.key)
+                && modifiers_satisfied
+            {
                 enacted_mode_change = Some((mode_change).clone());
             }
         }
@@ -268,61 +247,61 @@ fn update(app: &mut App, state: &mut State) {
     if let Some(mode_change) = enacted_mode_change {
         match mode_change {
             ModeChange::Insert => {
-                state.mode = Mode::Insert;
+                state.editor.mode = Mode::Insert;
             }
             ModeChange::InsertAfter => {
-                state.mode = Mode::Insert;
-                state.buffer().move_x(1);
+                state.editor.mode = Mode::Insert;
+                state.editor.buffer().move_x(1);
             }
             ModeChange::InsertEnd => {
-                state.mode = Mode::Insert;
+                state.editor.mode = Mode::Insert;
             }
             ModeChange::InsertStart => {
-                state.mode = Mode::Insert;
+                state.editor.mode = Mode::Insert;
             }
             ModeChange::Escape => {
-                state.mode = Mode::Normal;
+                state.editor.mode = Mode::Normal;
             }
             ModeChange::EnterCommand => {
-                state.mode = Mode::Command;
-                state.command_line.clear();
-                state.command_line.push(':');
+                state.editor.mode = Mode::Command;
+                state.editor.command_line.clear();
+                state.editor.command_line.push(':');
             }
         }
         return;
     }
-    match state.mode {
+    match state.editor.mode {
         Mode::Normal => {
-            let action = state.action.clone();
+            let action = state.editor.action.clone();
 
             if let Some(motion) = get_motion_input(app, state) {
-                let target = motion.get_target(&state.buffer());
+                let target = motion.get_target(&state.editor.buffer());
                 if let Some(action) = action {
                     match action {
                         Action::Delete => {
-                            let reached_target = state.buffer().cursor <= target;
-                            let cursor = state.buffer().cursor;
+                            let reached_target = state.editor.buffer().cursor <= target;
+                            let cursor = state.editor.buffer().cursor;
                             if reached_target {
-                                state.buffer().text.remove(cursor..target);
+                                state.editor.buffer().text.remove(cursor..target);
                             } else {
-                                state.buffer().text.remove(target..cursor);
-                                state.buffer().cursor = target;
+                                state.editor.buffer().text.remove(target..cursor);
+                                state.editor.buffer().cursor = target;
                             }
                         }
                         Action::Replace => {
-                            state.mode = Mode::Insert;
-                            let cursor = state.buffer().cursor;
+                            state.editor.mode = Mode::Insert;
+                            let cursor = state.editor.buffer().cursor;
                             if cursor <= target {
-                                state.buffer().text.remove(cursor..target);
+                                state.editor.buffer().text.remove(cursor..target);
                             } else {
-                                state.buffer().text.remove(target..cursor);
-                                state.buffer().cursor = target;
+                                state.editor.buffer().text.remove(target..cursor);
+                                state.editor.buffer().cursor = target;
                             }
                         }
                     }
-                    state.action = None;
+                    state.editor.action = None;
                 } else {
-                    state.buffer().cursor = target;
+                    state.editor.buffer().cursor = target;
                 }
             }
 
@@ -335,53 +314,71 @@ fn update(app: &mut App, state: &mut State) {
             }
 
             if app.keyboard.was_pressed(KeyCode::A) {
-                state.buffer().move_x(1);
-                state.mode = Mode::Insert;
+                state.editor.buffer().move_x(1);
+                state.editor.mode = Mode::Insert;
                 return;
             }
 
             if app.keyboard.was_pressed(KeyCode::X) {
-                let cursor = state.buffer().cursor;
-                state.buffer().text.remove(cursor..cursor + 1);
-                state.buffer().move_x(0);
+                let cursor = state.editor.buffer().cursor;
+                state.editor.buffer().text.remove(cursor..cursor + 1);
+                state.editor.buffer().move_x(0);
             }
         }
         Mode::Insert => {
-            let cursor = state.buffer().cursor;
+            let cursor = state.editor.buffer().cursor;
             if was_pressed_or_held(app, state, KeyCode::Back) {
                 if cursor > 0 {
-                    state.buffer().text.remove(cursor - 1..cursor);
-                    state.buffer().move_x(-1);
+                    state.editor.buffer().text.remove(cursor - 1..cursor);
+                    state.editor.buffer().move_x(-1);
                 }
             }
 
             if was_pressed_or_held(app, state, KeyCode::Return) {
-                state.buffer().insert_after_cursor('\n');
-                state.buffer().move_x(1)
+                state.editor.buffer().insert_after_cursor('\n');
+                state.editor.buffer().move_x(1)
             }
 
             if was_pressed_or_held(app, state, KeyCode::Tab) {
-                let cursor = state.buffer().cursor;
-                state.buffer().text.insert(cursor, &" ".repeat(TAB_SIZE));
-                state.buffer().move_x(TAB_SIZE as i32);
+                let cursor = state.editor.buffer().cursor;
+                state
+                    .editor
+                    .buffer()
+                    .text
+                    .insert(cursor, &" ".repeat(TAB_SIZE));
+                state.editor.buffer().move_x(TAB_SIZE as i32);
             }
 
             if was_pressed_or_held(app, state, KeyCode::Delete) {
-                let length = state.buffer().text.len_chars();
-                let cursor = state.buffer().cursor;
-                state.buffer().text.remove(cursor..(cursor + 1).min(length));
+                let length = state.editor.buffer().text.len_chars();
+                let cursor = state.editor.buffer().cursor;
+                state
+                    .editor
+                    .buffer()
+                    .text
+                    .remove(cursor..(cursor + 1).min(length));
             }
         }
 
         Mode::Command => {
             if was_pressed_or_held(app, state, KeyCode::Return) {
-                execute_command(state);
+                let result = prepare_command(&state.commands, &state.editor.command_line);
+                match result {
+                    Ok((parameters, command_index)) => {
+                        (state.commands[command_index].execute)(parameters, &mut state.editor);
+                    }
+                    Err(error_message) => {
+                        println!("{}", error_message);
+                    }
+                }
+                state.editor.command_line.clear();
+                state.editor.mode = Mode::Normal;
             }
 
             if was_pressed_or_held(app, state, KeyCode::Back) {
-                state.command_line.pop();
-                if state.command_line.is_empty() {
-                    state.mode = Mode::Normal;
+                state.editor.command_line.pop();
+                if state.editor.command_line.is_empty() {
+                    state.editor.mode = Mode::Normal;
                 }
             }
         }
@@ -411,7 +408,8 @@ fn calculate_camera_offset(
 }
 
 fn draw(gfx: &mut Graphics, state: &mut State) {
-    let (theme, highlighted_lines) = highlight(&state.buffer().text, "py", "base16-ocean.dark");
+    let (theme, highlighted_lines) =
+        highlight(&state.editor.buffer().text, "py", "base16-ocean.dark");
 
     let mut draw = gfx.create_draw();
     draw.clear(convert_color(theme.settings.background.unwrap()));
@@ -422,11 +420,11 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
     let bounds = draw.last_text_bounds();
     let char_width = bounds.width;
 
-    let cursor = state.buffer().cursor;
-    let cursor_line = state.buffer().text.char_to_line(cursor);
-    let cursor_line_position = state.buffer().find_line_position(cursor);
+    let cursor = state.editor.buffer().cursor;
+    let cursor_line = state.editor.buffer().text.char_to_line(cursor);
+    let cursor_line_position = state.editor.buffer().find_line_position(cursor);
 
-    let line_count = state.buffer().text.len_lines() - 1;
+    let line_count = state.editor.buffer().text.len_lines() - 1;
     let line_number_digit_count = line_count.to_string().len().max(3);
     let line_number_offset = if SHOW_LINE_NUMBERS {
         line_number_digit_count as f32 * char_width * 1.5
@@ -469,7 +467,7 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
         let y_position = state.line_height * cursor_line as f32;
         let cursor_color = convert_color(theme.settings.caret.unwrap());
 
-        match state.mode {
+        match state.editor.mode {
             Mode::Normal => {
                 draw.rect(
                     (
@@ -529,7 +527,7 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
     }
 
     // render command line at the bottom of the screen
-    if state.mode == Mode::Command {
+    if state.editor.mode == Mode::Command {
         let (w, h) = gfx.size();
         draw.rect(
             (0.0, h as f32 - COMMAND_BOX_PADDING - state.line_height),
@@ -543,7 +541,7 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
         )
         .color(convert_color(theme.settings.guide.unwrap()));
 
-        draw.text(&state.font, &state.command_line)
+        draw.text(&state.font, &state.editor.command_line)
             .position(
                 0.0,
                 h as f32 - state.line_height - COMMAND_BOX_PADDING / 2.0,

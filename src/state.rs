@@ -1,5 +1,6 @@
 use crate::action::Action;
 use crate::buffer::{Buffer, Cursor};
+use crate::commands::Command;
 use crate::motion::Motion;
 use notan::draw::Font;
 use notan::prelude::{AppState, KeyCode};
@@ -70,11 +71,7 @@ pub struct Keymap {
     pub mode_change_bindings: HashMap<Mode, ModeChangeBindings>,
 }
 
-#[derive(AppState)]
-pub struct State {
-    pub font: Font,
-    pub line_height: f32,
-
+pub struct Editor {
     pub buffers: Vec<Buffer>,
     pub current_buffer_index: usize,
     pub command_line: String,
@@ -82,15 +79,25 @@ pub struct State {
     pub mode: Mode,
 
     pub action: Option<Action>,
+}
+
+#[derive(AppState)]
+pub struct State {
+    pub font: Font,
+    pub line_height: f32,
+
+    pub editor: Editor,
 
     pub keymap: Keymap,
+
+    pub commands: Vec<Command>,
 
     pub last_time: f32,
     pub initial_movement_delay: f32,
     pub inter_movement_delay: f32,
 }
 
-impl State {
+impl Editor {
     /// Get the currently selected buffer.
     pub fn buffer(&mut self) -> &mut Buffer {
         &mut self.buffers[self.current_buffer_index]
@@ -100,6 +107,10 @@ impl State {
         self.current_buffer_index = (self.current_buffer_index + 1) % self.buffers.len();
     }
     pub fn previous_buffer(&mut self) {
-        self.current_buffer_index = (self.current_buffer_index - 1) % self.buffers.len();
+        if self.current_buffer_index == 0 {
+            self.current_buffer_index = self.buffers.len() - 1;
+        } else {
+            self.current_buffer_index = self.current_buffer_index - 1;
+        }
     }
 }
